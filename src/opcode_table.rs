@@ -1,0 +1,271 @@
+use crate::instruction::{Instruction, InstructionInfo};
+
+pub const OPCODE_TABLE: [InstructionInfo; 256] = [
+    // 0x00 NOP
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 },
+    // 0x01 LD BC, u16
+    InstructionInfo { instruction: Instruction::LdBcU16, bytes: 3, cycles: 12 },
+    // 0x02
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 },
+    // 0x03
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 },
+    // 0x04
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 },
+    // 0x05
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 },
+    // 0x06
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 },
+    // 0x07
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 },
+    // 0x08
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 },
+    // 0x09 ADD HL, BC
+    InstructionInfo { instruction: Instruction::AddHlBc, bytes: 1, cycles: 8 },
+    // 0x0A to 0xFF (Fill with NOP for now)
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x0A
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x0B
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x0C
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x0D
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x0E
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x0F
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x10
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x11
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x12
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x13
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x14
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x15
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x16
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x17
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x18
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x19
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x1A
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x1B
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x1C
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x1D
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x1E
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x1F
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x20
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x21
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x22
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x23
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x24
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x25
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x26
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x27
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x28
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x29
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x2A
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x2B
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x2C
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x2D
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x2E
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x2F
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x30
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x31
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x32
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x33
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x34
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x35
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x36
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x37
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x38
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x39
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x3A
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x3B
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x3C
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x3D
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x3E
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x3F
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x40
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x41
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x42
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x43
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x44
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x45
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x46
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x47
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x48
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x49
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x4A
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x4B
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x4C
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x4D
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x4E
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x4F
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x50
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x51
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x52
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x53
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x54
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x55
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x56
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x57
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x58
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x59
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x5A
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x5B
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x5C
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x5D
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x5E
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x5F
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x60
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x61
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x62
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x63
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x64
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x65
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x66
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x67
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x68
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x69
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x6A
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x6B
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x6C
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x6D
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x6E
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x6F
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x70
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x71
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x72
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x73
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x74
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x75
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x76
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x77
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x78
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x79
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x7A
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x7B
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x7C
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x7D
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x7E
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x7F
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x80
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x81
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x82
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x83
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x84
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x85
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x86
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x87
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x88
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x89
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x8A
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x8B
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x8C
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x8D
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x8E
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x8F
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x90
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x91
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x92
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x93
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x94
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x95
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x96
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x97
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x98
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x99
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x9A
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x9B
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x9C
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x9D
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x9E
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0x9F
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xA0
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xA1
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xA2
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xA3
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xA4
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xA5
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xA6
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xA7
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xA8
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xA9
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xAA
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xAB
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xAC
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xAD
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xAE
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xAF
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xB0
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xB1
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xB2
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xB3
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xB4
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xB5
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xB6
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xB7
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xB8
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xB9
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xBA
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xBB
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xBC
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xBD
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xBE
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xBF
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xC0
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xC1
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xC2
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xC3
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xC4
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xC5
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xC6
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xC7
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xC8
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xC9
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xCA
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xCB (Prefix for CB instructions)
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xCC
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xCD
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xCE
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xCF
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xD0
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xD1
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xD2
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xD3
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xD4
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xD5
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xD6
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xD7
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xD8
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xD9
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xDA
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xDB
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xDC
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xDD
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xDE
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xDF
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xE0
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xE1
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xE2
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xE3
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xE4
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xE5
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xE6
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xE7
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xE8
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xE9
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xEA
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xEB
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xEC
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xED
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xEE
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xEF
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xF0
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xF1
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xF2
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xF3
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xF4
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xF5
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xF6
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xF7
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xF8
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xF9
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xFA
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xFB
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xFC
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xFD
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xFE
+    InstructionInfo { instruction: Instruction::NOP, bytes: 1, cycles: 4 }, // 0xFF
+];
