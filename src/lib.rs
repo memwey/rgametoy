@@ -6,3 +6,6 @@ pub mod opcode_table;
 pub mod bus;
 pub mod console;
 pub mod instructions;
+pub mod p1;
+pub mod input;
+pub mod emulator;

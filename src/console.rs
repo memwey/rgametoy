@@ -29,4 +29,8 @@ impl Console {
     pub fn get_cpu_mut(&mut self) -> &mut Cpu {
         &mut self.cpu
     }
+
+    pub fn get_bus_mut(&mut self) -> &mut MemoryBus {
+        &mut self.bus
+    }
 }

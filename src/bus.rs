@@ -1,4 +1,5 @@
 use crate::mmu::Mmu;
+use crate::p1::P1; // Renamed GameBoyJoypad to P1
 
 pub trait Bus {
     fn read_byte(&self, addr: u16) -> u8;
@@ -8,23 +9,35 @@ pub trait Bus {
 
 pub struct MemoryBus {
     mmu: Mmu,
+    p1: P1, // Concrete P1 instance
 }
 
 impl MemoryBus {
     pub fn new() -> MemoryBus {
         MemoryBus {
             mmu: Mmu::new(),
+            p1: P1::new(), // Initialize concrete P1
         }
+    }
+
+    pub fn get_p1_mut(&mut self) -> &mut P1 {
+        &mut self.p1
     }
 }
 
 impl Bus for MemoryBus {
     fn read_byte(&self, addr: u16) -> u8 {
-        self.mmu.read_byte(addr)
+        match addr {
+            0xFF00 => self.p1.read_register(),
+            _ => self.mmu.read_byte(addr),
+        }
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) {
-        self.mmu.write_byte(addr, value);
+        match addr {
+            0xFF00 => self.p1.write_register(value),
+            _ => self.mmu.write_byte(addr, value),
+        }
     }
 
     fn read_u16(&self, addr: u16) -> u16 {
