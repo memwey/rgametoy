@@ -10,3 +10,4 @@ pub mod p1;
 pub mod input;
 pub mod emulator;
 pub mod interrupts;
+pub mod timer;

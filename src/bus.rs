@@ -1,6 +1,7 @@
 use crate::mmu::Mmu;
 use crate::p1::P1; // Renamed GameBoyJoypad to P1
 use crate::interrupts::InterruptType;
+use crate::timer::Timer; // Import Timer
 
 pub trait Bus {
     fn read_byte(&self, addr: u16) -> u8;
@@ -13,6 +14,7 @@ pub struct MemoryBus {
     p1: P1, // Concrete P1 instance
     if_register: u8, // Interrupt Flag register (0xFF0F)
     ie_register: u8, // Interrupt Enable register (0xFFFF)
+    timer: Timer, // Timer instance
 }
 
 impl MemoryBus {
@@ -22,11 +24,16 @@ impl MemoryBus {
             p1: P1::new(), // Initialize concrete P1
             if_register: 0x00,
             ie_register: 0x00,
+            timer: Timer::new(), // Initialize Timer
         }
     }
 
     pub fn get_p1_mut(&mut self) -> &mut P1 {
         &mut self.p1
+    }
+
+    pub fn get_timer_mut(&mut self) -> &mut Timer {
+        &mut self.timer
     }
 
     pub fn request_interrupt(&mut self, interrupt_type: InterruptType) {
@@ -38,6 +45,7 @@ impl Bus for MemoryBus {
     fn read_byte(&self, addr: u16) -> u8 {
         match addr {
             0xFF00 => self.p1.read_register(),
+            0xFF04..=0xFF07 => self.timer.read_register(addr),
             0xFF0F => self.if_register,
             0xFFFF => self.ie_register,
             _ => self.mmu.read_byte(addr),
@@ -47,6 +55,7 @@ impl Bus for MemoryBus {
     fn write_byte(&mut self, addr: u16, value: u8) {
         match addr {
             0xFF00 => self.p1.write_register(value),
+            0xFF04..=0xFF07 => self.timer.write_register(addr, value),
             0xFF0F => self.if_register = value,
             0xFFFF => self.ie_register = value,
             _ => self.mmu.write_byte(addr, value),

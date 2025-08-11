@@ -16,9 +16,8 @@ impl Emulator {
 
     pub fn run(&mut self) {
         // This will be the main emulation loop
-        // For now, let's just update input and step the console once
-        self.update_input();
-        self.console.step();
+        self.update_input(); // Update input before running a frame
+        self.console.run_frame(); // Run a full frame
     }
 
     pub fn update_input(&mut self) {
