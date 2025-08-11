@@ -1,5 +1,6 @@
 use crate::mmu::Mmu;
 use crate::p1::P1; // Renamed GameBoyJoypad to P1
+use crate::interrupts::InterruptType;
 
 pub trait Bus {
     fn read_byte(&self, addr: u16) -> u8;
@@ -10,6 +11,8 @@ pub trait Bus {
 pub struct MemoryBus {
     mmu: Mmu,
     p1: P1, // Concrete P1 instance
+    if_register: u8, // Interrupt Flag register (0xFF0F)
+    ie_register: u8, // Interrupt Enable register (0xFFFF)
 }
 
 impl MemoryBus {
@@ -17,11 +20,17 @@ impl MemoryBus {
         MemoryBus {
             mmu: Mmu::new(),
             p1: P1::new(), // Initialize concrete P1
+            if_register: 0x00,
+            ie_register: 0x00,
         }
     }
 
     pub fn get_p1_mut(&mut self) -> &mut P1 {
         &mut self.p1
+    }
+
+    pub fn request_interrupt(&mut self, interrupt_type: InterruptType) {
+        self.if_register |= interrupt_type.to_bit();
     }
 }
 
@@ -29,6 +38,8 @@ impl Bus for MemoryBus {
     fn read_byte(&self, addr: u16) -> u8 {
         match addr {
             0xFF00 => self.p1.read_register(),
+            0xFF0F => self.if_register,
+            0xFFFF => self.ie_register,
             _ => self.mmu.read_byte(addr),
         }
     }
@@ -36,6 +47,8 @@ impl Bus for MemoryBus {
     fn write_byte(&mut self, addr: u16, value: u8) {
         match addr {
             0xFF00 => self.p1.write_register(value),
+            0xFF0F => self.if_register = value,
+            0xFFFF => self.ie_register = value,
             _ => self.mmu.write_byte(addr, value),
         }
     }

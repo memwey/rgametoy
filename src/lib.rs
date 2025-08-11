@@ -9,3 +9,4 @@ pub mod instructions;
 pub mod p1;
 pub mod input;
 pub mod emulator;
+pub mod interrupts;
