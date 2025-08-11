@@ -1,15 +1,15 @@
-use rgametoy::cpu::Cpu;
+use rgametoy::console::Console;
 
 fn main() {
-    let mut cpu = Cpu::new();
+    let mut console = Console::new();
     let program = [0x01, 0x34, 0x12, 0x00]; // LD BC, 0x1234; NOP
-    cpu.load_program(&program);
+    console.load_program(&program);
 
-    println!("Initial BC: {:04X}", cpu.get_registers().get_bc());
-    println!("Initial PC: {:04X}", cpu.get_registers().pc);
+    println!("Initial BC: {:04X}", console.get_cpu().get_registers().get_bc());
+    println!("Initial PC: {:04X}", console.get_cpu().get_registers().pc);
 
-    cpu.step();
+    console.step();
 
-    println!("BC after step: {:04X}", cpu.get_registers().get_bc());
-    println!("PC after step: {:04X}", cpu.get_registers().pc);
+    println!("BC after step: {:04X}", console.get_cpu().get_registers().get_bc());
+    println!("PC after step: {:04X}", console.get_cpu().get_registers().pc);
 }

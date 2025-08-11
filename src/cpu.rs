@@ -1,18 +1,15 @@
 use crate::registers::Registers;
-use crate::mmu::Mmu;
-use crate::instruction::Instruction;
+use crate::bus::Bus;
 use crate::opcode_table::OPCODE_TABLE;
 
 pub struct Cpu {
     registers: Registers,
-    mmu: Mmu,
 }
 
 impl Cpu {
     pub fn new() -> Cpu {
         Cpu {
             registers: Registers::new(),
-            mmu: Mmu::new(),
         }
     }
 
@@ -36,58 +33,45 @@ impl Cpu {
         self.registers.set_af(value);
     }
 
+    pub fn get_pc(&self) -> u16 {
+        self.registers.pc
+    }
+
     pub fn set_pc(&mut self, value: u16) {
         self.registers.pc = value;
+    }
+
+    pub fn get_sp(&self) -> u16 {
+        self.registers.sp
     }
 
     pub fn set_sp(&mut self, value: u16) {
         self.registers.sp = value;
     }
 
-    pub fn load_program(&mut self, program: &[u8]) {
+    pub fn get_registers_mut(&mut self) -> &mut Registers {
+        &mut self.registers
+    }
+
+    pub fn load_program(&mut self, bus: &mut dyn Bus, program: &[u8]) {
         for (i, &byte) in program.iter().enumerate() {
-            self.mmu.write_byte(i as u16, byte);
+            bus.write_byte(i as u16, byte);
         }
     }
 
-    pub fn step(&mut self) -> u8 {
+    pub fn step(&mut self, bus: &mut dyn Bus) -> u8 {
         // 1. Fetch opcode
-        let opcode = self.mmu.read_byte(self.registers.pc);
+        let opcode = bus.read_byte(self.registers.pc);
 
         // 2. Get instruction info from table
         let instruction_info = &OPCODE_TABLE[opcode as usize];
 
         // 3. Execute instruction
-        let cycles = self.execute(&instruction_info.instruction);
+        let cycles = (instruction_info.execute_fn)(self, bus);
 
         // 4. Advance PC
         self.registers.pc += instruction_info.bytes as u16;
 
         cycles
-    }
-
-    fn execute(&mut self, instruction: &Instruction) -> u8 {
-        match instruction {
-            Instruction::NOP => {
-                // Do nothing
-                4 // Return number of cycles
-            }
-            Instruction::LdBcU16 => {
-                let value = self.mmu.read_u16(self.registers.pc);
-                self.registers.set_bc(value);
-                12 // Return number of cycles
-            }
-            Instruction::AddHlBc => {
-                let hl = self.registers.get_hl();
-                let bc = self.registers.get_bc();
-                let (new_hl, carry) = hl.overflowing_add(bc);
-
-                self.registers.set_hl(new_hl);
-                self.registers.set_flag_n(false);
-                self.registers.set_flag_h((hl & 0x0FFF) + (bc & 0x0FFF) > 0x0FFF); // Half-carry for 16-bit addition
-                self.registers.set_flag_c(carry);
-                8 // Return number of cycles
-            }
-        }
     }
 }
