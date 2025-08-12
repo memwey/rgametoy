@@ -1,7 +1,6 @@
 pub mod registers;
 pub mod cpu;
 pub mod instruction;
-pub mod mmu;
 pub mod opcode_table;
 pub mod bus;
 pub mod console;
@@ -11,3 +10,9 @@ pub mod input;
 pub mod emulator;
 pub mod interrupts;
 pub mod timer;
+pub mod ppu;
+pub mod rom;
+pub mod wram;
+pub mod hram;
+pub mod lcd;
+pub mod display;

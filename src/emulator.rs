@@ -1,9 +1,11 @@
 use crate::console::Console;
+use crate::display::Display;
 use crate::input::Input;
 
 pub struct Emulator {
     console: Console,
     input: Input,
+    display: Display,
 }
 
 impl Emulator {
@@ -11,13 +13,17 @@ impl Emulator {
         Emulator {
             console: Console::new(),
             input: Input::new(),
+            display: Display::new(),
         }
     }
 
     pub fn run(&mut self) {
-        // This will be the main emulation loop
-        self.update_input(); // Update input before running a frame
-        self.console.run_frame(); // Run a full frame
+        while self.display.is_open() {
+            self.update_input();
+            if let Some(framebuffer) = self.console.run_frame() {
+                self.display.present_frame();
+            }
+        }
     }
 
     pub fn update_input(&mut self) {

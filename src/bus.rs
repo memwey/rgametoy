@@ -1,7 +1,10 @@
-use crate::mmu::Mmu;
-use crate::p1::P1; // Renamed GameBoyJoypad to P1
+use crate::hram::Hram;
 use crate::interrupts::InterruptType;
-use crate::timer::Timer; // Import Timer
+use crate::p1::P1;
+use crate::ppu::Ppu;
+use crate::rom::Rom;
+use crate::timer::Timer;
+use crate::wram::Wram;
 
 pub trait Bus {
     fn read_byte(&self, addr: u16) -> u8;
@@ -10,21 +13,27 @@ pub trait Bus {
 }
 
 pub struct MemoryBus {
-    mmu: Mmu,
-    p1: P1, // Concrete P1 instance
+    rom: Rom,
+    wram: Wram,
+    hram: Hram,
+    p1: P1,
+    ppu: Ppu,
+    timer: Timer,
     if_register: u8, // Interrupt Flag register (0xFF0F)
     ie_register: u8, // Interrupt Enable register (0xFFFF)
-    timer: Timer, // Timer instance
 }
 
 impl MemoryBus {
     pub fn new() -> MemoryBus {
         MemoryBus {
-            mmu: Mmu::new(),
-            p1: P1::new(), // Initialize concrete P1
+            rom: Rom::new(),
+            wram: Wram::new(),
+            hram: Hram::new(),
+            p1: P1::new(),
+            ppu: Ppu::new(),
+            timer: Timer::new(),
             if_register: 0x00,
             ie_register: 0x00,
-            timer: Timer::new(), // Initialize Timer
         }
     }
 
@@ -36,6 +45,10 @@ impl MemoryBus {
         &mut self.timer
     }
 
+    pub fn get_ppu_mut(&mut self) -> &mut Ppu {
+        &mut self.ppu
+    }
+
     pub fn request_interrupt(&mut self, interrupt_type: InterruptType) {
         self.if_register |= interrupt_type.to_bit();
     }
@@ -44,21 +57,63 @@ impl MemoryBus {
 impl Bus for MemoryBus {
     fn read_byte(&self, addr: u16) -> u8 {
         match addr {
+            // 32KB ROM Area
+            0x0000..=0x7FFF => self.rom.read_byte(addr),
+            // 8KB VRAM
+            0x8000..=0x9FFF => self.ppu.read_vram(addr),
+            // 8KB External RAM (from cartridge, not implemented)
+            0xA000..=0xBFFF => 0xFF, // Placeholder
+            // 8KB Work RAM (WRAM)
+            0xC000..=0xDFFF => self.wram.read_byte(addr),
+            // Echo RAM (mirror of 0xC000-0xDDFF)
+            0xE000..=0xFDFF => self.wram.read_byte(addr),
+            // OAM (Sprite Attribute Table)
+            0xFE00..=0xFE9F => self.ppu.read_oam(addr),
+            // Not Usable
+            0xFEA0..=0xFEFF => 0xFF,
+            // I/O Registers
             0xFF00 => self.p1.read_register(),
             0xFF04..=0xFF07 => self.timer.read_register(addr),
             0xFF0F => self.if_register,
+            // PPU I/O Registers
+            0xFF40..=0xFF4B => self.ppu.read_register(addr),
+            // TODO: Add other I/O registers (APU, Serial, Joypad)
+            0xFF01..=0xFF03 | 0xFF08..=0xFF0E | 0xFF10..=0xFF3F | 0xFF4C..=0xFF7F => 0xFF, // Placeholders
+            // High RAM (HRAM)
+            0xFF80..=0xFFFE => self.hram.read_byte(addr),
+            // Interrupt Enable Register
             0xFFFF => self.ie_register,
-            _ => self.mmu.read_byte(addr),
         }
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) {
         match addr {
+            // ROM Area (writes are only for loading program, otherwise ignored)
+            0x0000..=0x7FFF => self.rom.write_byte(addr, value),
+            // 8KB VRAM
+            0x8000..=0x9FFF => self.ppu.write_vram(addr, value),
+            // 8KB External RAM
+            0xA000..=0xBFFF => { /* No-op */ }
+            // 8KB Work RAM (WRAM)
+            0xC000..=0xDFFF => self.wram.write_byte(addr, value),
+            // Echo RAM (mirror of 0xC000-0xDDFF)
+            0xE000..=0xFDFF => self.wram.write_byte(addr, value),
+            // OAM
+            0xFE00..=0xFE9F => self.ppu.write_oam(addr, value),
+            // Not Usable
+            0xFEA0..=0xFEFF => { /* No-op */ }
+            // I/O Registers
             0xFF00 => self.p1.write_register(value),
             0xFF04..=0xFF07 => self.timer.write_register(addr, value),
             0xFF0F => self.if_register = value,
+            // PPU I/O Registers
+            0xFF40..=0xFF4B => self.ppu.write_register(addr, value),
+            // TODO: Add other I/O registers (APU, Serial, Joypad)
+            0xFF01..=0xFF03 | 0xFF08..=0xFF0E | 0xFF10..=0xFF3F | 0xFF4C..=0xFF7F => { /* No-op */ }
+            // High RAM (HRAM)
+            0xFF80..=0xFFFE => self.hram.write_byte(addr, value),
+            // Interrupt Enable Register
             0xFFFF => self.ie_register = value,
-            _ => self.mmu.write_byte(addr, value),
         }
     }
 
