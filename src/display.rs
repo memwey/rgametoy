@@ -31,6 +31,11 @@ impl Display {
     }
 
     pub fn receive_scanline(&mut self, ly: u8, pixels: &[Pixel]) {
+        // Ensure ly is within valid range
+        if ly >= LCD_HEIGHT as u8 {
+            return;
+        }
+        
         let start_index = (ly as usize) * LCD_WIDTH;
         // Define a simple grayscale palette
         let palette: [u32; 4] = [

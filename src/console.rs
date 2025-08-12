@@ -15,7 +15,6 @@ pub struct Console {
     bus: MemoryBus,
     lcd: Lcd,
     total_cycles: u64,
-    prev_ly: u8, // Track previous LY for scanline completion detection
 }
 
 impl Console {
@@ -25,7 +24,6 @@ impl Console {
             bus: MemoryBus::new(),
             lcd: Lcd::new(),
             total_cycles: 0,
-            prev_ly: 0,
         }
     }
 
@@ -40,15 +38,6 @@ impl Console {
             self.bus.request_interrupt(InterruptType::Timer);
         }
         
-        // Tick the PPU and get pixel data
-        let pixel_data = self.bus.get_ppu_mut().tick(cycles);
-
-        // Process each pixel from PPU
-        for (x, pixel) in pixel_data {
-            let ly = self.bus.get_ppu_mut().ly;
-            self.lcd.receive_pixel(x, ly, pixel);
-        }
-
         cycles
     }
 
@@ -58,14 +47,19 @@ impl Console {
             let cycles_executed = self.step();
             cycles_this_frame += cycles_executed as u64;
 
-            // Scanline completion detection and transfer to Display
+            // Tick the PPU and get pixel data
+            let pixel_data = self.bus.get_ppu_mut().tick(cycles_executed);
             let current_ly = self.bus.get_ppu_mut().ly;
-            if current_ly != self.prev_ly {
-                // A new scanline has started, so the previous one is complete (if it was a visible scanline)
-                if self.prev_ly < 144 { // Only send visible scanlines
-                    display.receive_scanline(self.prev_ly, self.lcd.get_frame_data());
+
+            // Process each pixel from PPU
+            for (_x, pixel) in pixel_data {
+                // Receive pixel and check if scanline is complete
+                if self.lcd.receive_pixel(pixel, current_ly) {
+                    // Scanline is complete, send it to display
+                    if current_ly < 144 { // Only send visible scanlines
+                        display.receive_scanline(current_ly, self.lcd.get_line_data());
+                    }
                 }
-                self.prev_ly = current_ly;
             }
 
             // Check if a full frame is ready (PPU enters VBlank)

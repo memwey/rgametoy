@@ -1,26 +1,53 @@
 use crate::pixel::Pixel;
 
 const LCD_WIDTH: usize = 160;
-const LCD_HEIGHT: usize = 144;
-const FRAMEBUFFER_SIZE: usize = LCD_WIDTH * LCD_HEIGHT; // Shades
 
 pub struct Lcd {
-    framebuffer: [Pixel; FRAMEBUFFER_SIZE],
+    linebuffer: [Pixel; LCD_WIDTH],
+    current_scanline: u8,
+    current_x: u8,
+    last_ppu_ly: u8, // Track the last seen PPU LY value
 }
 
 impl Lcd {
     pub fn new() -> Lcd {
         Lcd {
-            framebuffer: [Pixel::new(0); FRAMEBUFFER_SIZE],
+            linebuffer: [Pixel::new(0); LCD_WIDTH],
+            current_scanline: 0,
+            current_x: 0,
+            last_ppu_ly: 0,
         }
     }
 
-    pub fn receive_pixel(&mut self, x: u8, y: u8, pixel: Pixel) {
-        let index = (y as usize) * LCD_WIDTH + (x as usize);
-        self.framebuffer[index] = pixel;
+    pub fn receive_pixel(&mut self, pixel: Pixel, ppu_ly: u8) -> bool {
+        // Check if PPU LY has changed, indicating a new scanline
+        if ppu_ly != self.last_ppu_ly {
+            // PPU LY has changed, we're starting a new scanline
+            self.current_scanline = ppu_ly;
+            self.current_x = 0;
+            self.last_ppu_ly = ppu_ly;
+        }
+        
+        // Store pixel in linebuffer if within bounds
+        if (self.current_x as usize) < LCD_WIDTH {
+            self.linebuffer[self.current_x as usize] = pixel;
+            self.current_x += 1;
+            
+            // Return true if we've completed a full scanline
+            if self.current_x as usize == LCD_WIDTH {
+                self.current_x = 0; // Reset for next scanline
+                self.last_ppu_ly = ppu_ly; // Update last seen LY
+                return true;
+            }
+        }
+        false
     }
 
-    pub fn get_frame_data(&self) -> &[Pixel] {
-        &self.framebuffer
+    pub fn get_line_data(&self) -> &[Pixel] {
+        &self.linebuffer
+    }
+
+    pub fn get_current_scanline(&self) -> u8 {
+        self.current_scanline
     }
 }
