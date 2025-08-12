@@ -1,5 +1,6 @@
 use crate::cpu::Cpu;
 use crate::bus::{Bus, MemoryBus};
+use crate::interrupts::InterruptType;
 
 // Game Boy operates at 4.194304 MHz, which is 4194304 cycles per second.
 // A frame is 1/60th of a second.
@@ -29,7 +30,9 @@ impl Console {
     pub fn step(&mut self) -> u8 {
         let cycles = self.cpu.step(&mut self.bus as &mut dyn Bus);
         self.total_cycles += cycles as u64;
-        self.bus.get_timer_mut().tick(cycles); // Tick the timer
+        if self.bus.get_timer_mut().tick(cycles) {
+            self.bus.request_interrupt(InterruptType::Timer);
+        }
         // In the future, distribute cycles to other components (PPU, etc.)
         cycles
     }

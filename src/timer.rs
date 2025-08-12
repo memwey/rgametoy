@@ -21,7 +21,9 @@ impl Timer {
         }
     }
 
-    pub fn tick(&mut self, cycles: u8) {
+    pub fn tick(&mut self, cycles: u8) -> bool {
+        let mut interrupt_requested = false;
+
         // Update DIV register (increments at 16384 Hz, so every 256 CPU cycles)
         self.div_counter += cycles as u16;
         if self.div_counter >= 256 {
@@ -46,14 +48,14 @@ impl Timer {
                 // TIMA increments, if it overflows, reload from TMA and request interrupt
                 if self.tima == 0xFF {
                     self.tima = self.tma;
-                    // Request Timer Interrupt (handled by Bus/Console)
-                    // This part will need to be handled by the Bus, so we'll pass a flag or closure
-                    // For now, we'll just let it overflow
+                    interrupt_requested = true;
                 } else {
                     self.tima = self.tima.wrapping_add(1);
                 }
             }
         }
+
+        interrupt_requested
     }
 
     pub fn read_register(&self, addr: u16) -> u8 {
