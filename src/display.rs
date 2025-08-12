@@ -1,3 +1,4 @@
+use crate::pixel::Pixel;
 use minifb::{Window, WindowOptions};
 
 const LCD_WIDTH: usize = 160;
@@ -29,15 +30,19 @@ impl Display {
         }
     }
 
-    pub fn receive_scanline(&mut self, ly: u8, pixels: &[u8]) {
+    pub fn receive_scanline(&mut self, ly: u8, pixels: &[Pixel]) {
         let start_index = (ly as usize) * LCD_WIDTH;
+        // Define a simple grayscale palette
+        let palette: [u32; 4] = [
+            0xFF000000, // Shade 0: Black
+            0xFF555555, // Shade 1: Dark Gray
+            0xFFAAAAAA, // Shade 2: Light Gray
+            0xFFFFFFFF, // Shade 3: White
+        ];
+
         for x in 0..LCD_WIDTH {
-            let pixel_index_rgba = x * 4;
-            let r = pixels[pixel_index_rgba] as u32;
-            let g = pixels[pixel_index_rgba + 1] as u32;
-            let b = pixels[pixel_index_rgba + 2] as u32;
-            let a = pixels[pixel_index_rgba + 3] as u32;
-            self.framebuffer[start_index + x] = (a << 24) | (r << 16) | (g << 8) | b;
+            let shade = pixels[x].shade;
+            self.framebuffer[start_index + x] = palette[shade as usize];
         }
     }
 

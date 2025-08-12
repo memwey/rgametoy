@@ -1,7 +1,9 @@
+use crate::pixel::Pixel;
+
 const VRAM_SIZE: usize = 0x2000; // 8KB
 const OAM_SIZE: usize = 0xA0; // 160 bytes (0xFE00-0xFE9F)
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub enum PpuMode {
     HBlank,
     VBlank,
@@ -53,8 +55,8 @@ impl Ppu {
     }
 
     // PPU tick method (called by Console)
-    pub fn tick(&mut self, cycles: u8) -> Option<(u8, u8, u8, u8)> {
-        let mut output_pixel: Option<(u8, u8, u8, u8)> = None;
+    pub fn tick(&mut self, cycles: u8) -> Vec<(u8, Pixel)> {
+        let mut output_pixels: Vec<(u8, Pixel)> = Vec::new(); // (x, Pixel)
         self.cycles_in_mode += cycles as u16;
 
         match self.mode {
@@ -71,12 +73,8 @@ impl Ppu {
                 for _ in 0..cycles {
                     if self.current_pixel_x < 160 {
                         // Generate a test pixel
-                        let r = self.ly;
-                        let g = self.current_pixel_x;
-                        let b = 0;
-                        let a = 255;
-                        output_pixel = Some((r, g, b, a));
-
+                        let shade = self.get_background_pixel_color();
+                        output_pixels.push((self.current_pixel_x, Pixel::new(shade)));
                         self.current_pixel_x += 1;
                     }
                 }
@@ -111,7 +109,22 @@ impl Ppu {
                 }
             }
         }
-        output_pixel
+        output_pixels
+    }
+
+    // Simple function to get background pixel color (will be expanded later)
+    fn get_background_pixel_color(&self) -> u8 {
+        // For now, just return a simple pattern based on position
+        let tile_x = ((self.current_pixel_x as u16 + self.scx as u16) / 8) & 31;
+        let tile_y = ((self.ly as u16 + self.scy as u16) / 8) & 31;
+        let tile_id = (tile_y * 32 + tile_x) as u8;
+        
+        // Simple pattern for testing (0-3 for shades)
+        if (tile_id & 0x10) != 0 {
+            0 // Darkest shade
+        } else {
+            3 // Lightest shade
+        }
     }
 
     // Check if CPU can access VRAM (blocked during Mode 3)
@@ -187,5 +200,8 @@ impl Ppu {
             _ => { /* Should not happen */ }
         }
     }
+    
+    pub fn get_mode(&self) -> PpuMode {
+        self.mode.clone()
+    }
 }
-

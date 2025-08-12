@@ -16,3 +16,4 @@ pub mod wram;
 pub mod hram;
 pub mod lcd;
 pub mod display;
+pub mod pixel;

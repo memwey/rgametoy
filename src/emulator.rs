@@ -20,9 +20,7 @@ impl Emulator {
     pub fn run(&mut self) {
         while self.display.is_open() {
             self.update_input();
-            if let Some(framebuffer) = self.console.run_frame() {
-                self.display.present_frame();
-            }
+            self.console.run_frame(&mut self.display);
         }
     }
 
