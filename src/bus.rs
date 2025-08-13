@@ -5,6 +5,8 @@ use crate::ppu::Ppu;
 use crate::rom::Rom;
 use crate::timer::Timer;
 use crate::wram::Wram;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 pub trait Bus {
     fn read_byte(&self, addr: u16) -> u8;
@@ -16,37 +18,25 @@ pub struct MemoryBus {
     rom: Rom,
     wram: Wram,
     hram: Hram,
-    p1: P1,
-    ppu: Ppu,
-    timer: Timer,
+    p1: Rc<RefCell<P1>>,
+    ppu: Rc<RefCell<Ppu>>,
+    timer: Rc<RefCell<Timer>>,
     if_register: u8, // Interrupt Flag register (0xFF0F)
     ie_register: u8, // Interrupt Enable register (0xFFFF)
 }
 
 impl MemoryBus {
-    pub fn new() -> MemoryBus {
+    pub fn new(p1: Rc<RefCell<P1>>, ppu: Rc<RefCell<Ppu>>, timer: Rc<RefCell<Timer>>) -> MemoryBus {
         MemoryBus {
             rom: Rom::new(),
             wram: Wram::new(),
             hram: Hram::new(),
-            p1: P1::new(),
-            ppu: Ppu::new(),
-            timer: Timer::new(),
+            p1,
+            ppu,
+            timer,
             if_register: 0x00,
             ie_register: 0x00,
         }
-    }
-
-    pub fn get_p1_mut(&mut self) -> &mut P1 {
-        &mut self.p1
-    }
-
-    pub fn get_timer_mut(&mut self) -> &mut Timer {
-        &mut self.timer
-    }
-
-    pub fn get_ppu_mut(&mut self) -> &mut Ppu {
-        &mut self.ppu
     }
 
     pub fn request_interrupt(&mut self, interrupt_type: InterruptType) {
@@ -60,7 +50,7 @@ impl Bus for MemoryBus {
             // 32KB ROM Area
             0x0000..=0x7FFF => self.rom.read_byte(addr),
             // 8KB VRAM
-            0x8000..=0x9FFF => self.ppu.read_vram(addr),
+            0x8000..=0x9FFF => self.ppu.borrow().read_vram(addr),
             // 8KB External RAM (from cartridge, not implemented)
             0xA000..=0xBFFF => 0xFF, // Placeholder
             // 8KB Work RAM (WRAM)
@@ -68,15 +58,15 @@ impl Bus for MemoryBus {
             // Echo RAM (mirror of 0xC000-0xDDFF)
             0xE000..=0xFDFF => self.wram.read_byte(addr),
             // OAM (Sprite Attribute Table)
-            0xFE00..=0xFE9F => self.ppu.read_oam(addr),
+            0xFE00..=0xFE9F => self.ppu.borrow().read_oam(addr),
             // Not Usable
             0xFEA0..=0xFEFF => 0xFF,
             // I/O Registers
-            0xFF00 => self.p1.read_register(),
-            0xFF04..=0xFF07 => self.timer.read_register(addr),
+            0xFF00 => self.p1.borrow().read_register(),
+            0xFF04..=0xFF07 => self.timer.borrow().read_register(addr),
             0xFF0F => self.if_register,
             // PPU I/O Registers
-            0xFF40..=0xFF4B => self.ppu.read_register(addr),
+            0xFF40..=0xFF4B => self.ppu.borrow().read_register(addr),
             // TODO: Add other I/O registers (APU, Serial, Joypad)
             0xFF01..=0xFF03 | 0xFF08..=0xFF0E | 0xFF10..=0xFF3F | 0xFF4C..=0xFF7F => 0xFF, // Placeholders
             // High RAM (HRAM)
@@ -91,7 +81,7 @@ impl Bus for MemoryBus {
             // ROM Area (writes are only for loading program, otherwise ignored)
             0x0000..=0x7FFF => self.rom.write_byte(addr, value),
             // 8KB VRAM
-            0x8000..=0x9FFF => self.ppu.write_vram(addr, value),
+            0x8000..=0x9FFF => self.ppu.borrow_mut().write_vram(addr, value),
             // 8KB External RAM
             0xA000..=0xBFFF => { /* No-op */ }
             // 8KB Work RAM (WRAM)
@@ -99,15 +89,15 @@ impl Bus for MemoryBus {
             // Echo RAM (mirror of 0xC000-0xDDFF)
             0xE000..=0xFDFF => self.wram.write_byte(addr, value),
             // OAM
-            0xFE00..=0xFE9F => self.ppu.write_oam(addr, value),
+            0xFE00..=0xFE9F => self.ppu.borrow_mut().write_oam(addr, value),
             // Not Usable
             0xFEA0..=0xFEFF => { /* No-op */ }
             // I/O Registers
-            0xFF00 => self.p1.write_register(value),
-            0xFF04..=0xFF07 => self.timer.write_register(addr, value),
+            0xFF00 => self.p1.borrow_mut().write_register(value),
+            0xFF04..=0xFF07 => self.timer.borrow_mut().write_register(addr, value),
             0xFF0F => self.if_register = value,
             // PPU I/O Registers
-            0xFF40..=0xFF4B => self.ppu.write_register(addr, value),
+            0xFF40..=0xFF4B => self.ppu.borrow_mut().write_register(addr, value),
             // TODO: Add other I/O registers (APU, Serial, Joypad)
             0xFF01..=0xFF03 | 0xFF08..=0xFF0E | 0xFF10..=0xFF3F | 0xFF4C..=0xFF7F => { /* No-op */ }
             // High RAM (HRAM)

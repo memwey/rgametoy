@@ -11,6 +11,7 @@ pub mod emulator;
 pub mod interrupts;
 pub mod timer;
 pub mod ppu;
+pub mod fetcher; // New module
 pub mod rom;
 pub mod wram;
 pub mod hram;

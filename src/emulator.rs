@@ -26,7 +26,7 @@ impl Emulator {
 
     pub fn update_input(&mut self) {
         let raw_button_state = self.input.get_raw_button_state();
-        self.console.get_bus_mut().get_p1_mut().update_button_state(raw_button_state);
+        self.console.get_p1().borrow_mut().update_button_state(raw_button_state);
     }
 
     pub fn get_input_mut(&mut self) -> &mut Input {

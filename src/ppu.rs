@@ -3,6 +3,8 @@ use crate::pixel::Pixel;
 const VRAM_SIZE: usize = 0x2000; // 8KB
 const OAM_SIZE: usize = 0xA0; // 160 bytes (0xFE00-0xFE9F)
 
+use crate::fetcher::{Fetcher, FetcherState}; // New import
+
 #[derive(PartialEq, Clone)]
 pub enum PpuMode {
     HBlank,
@@ -29,6 +31,9 @@ pub struct Ppu {
     obp1: u8, // Object Palette 1 Data (0xFF49)
     wy: u8,   // Window Y Position (0xFF4A)
     wx: u8,   // Window X Position (0xFF4B)
+
+    // Fetcher instance
+    fetcher: Fetcher,
 }
 
 impl Ppu {
@@ -51,6 +56,7 @@ impl Ppu {
             obp1: 0,
             wy: 0,
             wx: 0,
+            fetcher: Fetcher::new(), // Initialize Fetcher
         }
     }
 
@@ -68,20 +74,37 @@ impl Ppu {
                 }
             }
             PpuMode::DrawingPixels => {
-                // In DrawingPixels mode, we output pixels
-                // Each pixel takes 1 cycle (simplified)
+                // In DrawingPixels mode, we process pixels using the fetcher
+                // Each cycle, we advance the fetcher state
                 for _ in 0..cycles {
                     if self.current_pixel_x < 160 {
-                        // Generate a test pixel
-                        let shade = self.get_background_pixel_color();
-                        output_pixels.push((self.current_pixel_x, Pixel::new(shade)));
-                        self.current_pixel_x += 1;
+                        // Only process fetcher if FIFO is empty or needs more pixels
+                        if self.fetcher.get_bg_fifo().is_empty() {
+                            self.fetcher.fetch_pixel_data(
+                                &self.vram,
+                                self.lcdc,
+                                self.scx,
+                                self.scy,
+                                self.ly,
+                                self.current_pixel_x,
+                                self.bgp,
+                            );
+                        }
+
+                        // If FIFO has pixels, pop one and output it
+                        if !self.fetcher.get_bg_fifo().is_empty() {
+                            let pixel = self.fetcher.get_bg_fifo().remove(0); // Pop from front
+                            output_pixels.push((self.current_pixel_x, pixel));
+                            self.current_pixel_x += 1;
+                        }
                     }
                 }
 
                 if self.current_pixel_x >= 160 { // Finished drawing scanline
                     self.mode = PpuMode::HBlank;
                     self.cycles_in_mode = 0;
+                    // Clear FIFOs for next scanline
+                    self.fetcher.clear_fifos();
                 }
             }
             PpuMode::HBlank => {
@@ -112,20 +135,7 @@ impl Ppu {
         output_pixels
     }
 
-    // Simple function to get background pixel color (will be expanded later)
-    fn get_background_pixel_color(&self) -> u8 {
-        // For now, just return a simple pattern based on position
-        let tile_x = ((self.current_pixel_x as u16 + self.scx as u16) / 8) & 31;
-        let tile_y = ((self.ly as u16 + self.scy as u16) / 8) & 31;
-        let tile_id = (tile_y * 32 + tile_x) as u8;
-        
-        // Simple pattern for testing (0-3 for shades)
-        if (tile_id & 0x10) != 0 {
-            0 // Darkest shade
-        } else {
-            3 // Lightest shade
-        }
-    }
+    
 
     // Check if CPU can access VRAM (blocked during Mode 3)
     pub fn can_access_vram(&self) -> bool {

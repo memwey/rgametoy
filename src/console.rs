@@ -3,6 +3,11 @@ use crate::bus::{Bus, MemoryBus};
 use crate::interrupts::InterruptType;
 use crate::lcd::Lcd;
 use crate::display::Display;
+use crate::p1::P1; // New import
+use crate::ppu::Ppu; // New import
+use crate::timer::Timer; // New import
+use std::rc::Rc; // New import
+use std::cell::RefCell; // New import
 
 // Game Boy operates at 4.194304 MHz, which is 4194304 cycles per second.
 // A frame is 1/60th of a second.
@@ -15,15 +20,25 @@ pub struct Console {
     bus: MemoryBus,
     lcd: Lcd,
     total_cycles: u64,
+    p1: Rc<RefCell<P1>>,
+    ppu: Rc<RefCell<Ppu>>,
+    timer: Rc<RefCell<Timer>>,
 }
 
 impl Console {
     pub fn new() -> Console {
+        let p1 = Rc::new(RefCell::new(P1::new()));
+        let ppu = Rc::new(RefCell::new(Ppu::new()));
+        let timer = Rc::new(RefCell::new(Timer::new()));
+
         Console {
             cpu: Cpu::new(),
-            bus: MemoryBus::new(),
+            bus: MemoryBus::new(Rc::clone(&p1), Rc::clone(&ppu), Rc::clone(&timer)),
             lcd: Lcd::new(),
             total_cycles: 0,
+            p1,
+            ppu,
+            timer,
         }
     }
 
@@ -34,7 +49,7 @@ impl Console {
     pub fn step(&mut self) -> u8 {
         let cycles = self.cpu.step(&mut self.bus as &mut dyn Bus);
         self.total_cycles += cycles as u64;
-        if self.bus.get_timer_mut().tick(cycles) {
+        if self.timer.borrow_mut().tick(cycles) {
             self.bus.request_interrupt(InterruptType::Timer);
         }
         
@@ -48,8 +63,8 @@ impl Console {
             cycles_this_frame += cycles_executed as u64;
 
             // Tick the PPU and get pixel data
-            let pixel_data = self.bus.get_ppu_mut().tick(cycles_executed);
-            let current_ly = self.bus.get_ppu_mut().ly;
+            let pixel_data = self.ppu.borrow_mut().tick(cycles_executed);
+            let current_ly = self.ppu.borrow().ly;
 
             // Process each pixel from PPU
             for (_x, pixel) in pixel_data {
@@ -63,19 +78,19 @@ impl Console {
             }
 
             // Check if a full frame is ready (PPU enters VBlank)
-            if self.bus.get_ppu_mut().ly == 144 && self.bus.get_ppu_mut().get_mode() == crate::ppu::PpuMode::VBlank {
+            if self.ppu.borrow().ly == 144 && self.ppu.borrow().get_mode() == crate::ppu::PpuMode::VBlank {
                 display.present_frame();
                 break; // Exit loop once a frame is ready
             }
         }
     }
 
-    pub fn get_cpu(&self) -> &Cpu {
-        &self.cpu
+    pub fn get_p1(&self) -> Rc<RefCell<P1>> {
+        Rc::clone(&self.p1)
     }
 
-    pub fn get_cpu_mut(&mut self) -> &mut Cpu {
-        &mut self.cpu
+    pub fn get_cpu(&self) -> &Cpu {
+        &self.cpu
     }
 
     pub fn get_bus_mut(&mut self) -> &mut MemoryBus {
