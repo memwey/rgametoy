@@ -3,7 +3,7 @@ use crate::pixel::Pixel;
 const VRAM_SIZE: usize = 0x2000; // 8KB
 const OAM_SIZE: usize = 0xA0; // 160 bytes (0xFE00-0xFE9F)
 
-use crate::fetcher::{Fetcher, FetcherState}; // New import
+use crate::fetcher::Fetcher; // New import
 
 #[derive(PartialEq, Clone)]
 pub enum PpuMode {
@@ -17,7 +17,7 @@ pub struct Ppu {
     vram: [u8; VRAM_SIZE],
     oam: [u8; OAM_SIZE],
     mode: PpuMode,
-    cycles_in_mode: u16,
+    dots: u16,
     pub ly: u8, // LCD Y-coordinate (current scanline)
     pub current_pixel_x: u8, // Current pixel X-coordinate on the scanline
     lcdc: u8, // LCD Control Register (0xFF40)
@@ -42,7 +42,7 @@ impl Ppu {
             vram: [0; VRAM_SIZE],
             oam: [0; OAM_SIZE],
             mode: PpuMode::OamScan, // Initial mode
-            cycles_in_mode: 0,
+            dots: 0,
             ly: 0,
             current_pixel_x: 0,
             lcdc: 0,
@@ -61,73 +61,68 @@ impl Ppu {
     }
 
     // PPU tick method (called by Console)
-    pub fn tick(&mut self, cycles: u8) -> Vec<(u8, Pixel)> {
+    pub fn tick(&mut self, t_cycles: u8) -> Vec<(u8, Pixel)> {
         let mut output_pixels: Vec<(u8, Pixel)> = Vec::new(); // (x, Pixel)
-        self.cycles_in_mode += cycles as u16;
+        
+        for _ in 0..(t_cycles * 4) {
+            self.dots += 1;
 
-        match self.mode {
-            PpuMode::OamScan => {
-                if self.cycles_in_mode >= 80 { // Mode 2 lasts 80 cycles
-                    self.mode = PpuMode::DrawingPixels;
-                    self.cycles_in_mode = 0;
-                    self.current_pixel_x = 0;
+            match self.mode {
+                PpuMode::OamScan => {
+                    if self.dots >= 80 { // Mode 2 lasts 80 dots
+                        self.mode = PpuMode::DrawingPixels;
+                        self.dots = 0;
+                        self.current_pixel_x = 0;
+                    }
                 }
-            }
-            PpuMode::DrawingPixels => {
-                // In DrawingPixels mode, we process pixels using the fetcher
-                // Each cycle, we advance the fetcher state
-                for _ in 0..cycles {
-                    if self.current_pixel_x < 160 {
-                        // Only process fetcher if FIFO is empty or needs more pixels
-                        if self.fetcher.get_bg_fifo().is_empty() {
-                            self.fetcher.fetch_pixel_data(
-                                &self.vram,
-                                self.lcdc,
-                                self.scx,
-                                self.scy,
-                                self.ly,
-                                self.current_pixel_x,
-                                self.bgp,
-                            );
-                        }
+                PpuMode::DrawingPixels => {
+                    // In DrawingPixels mode, we process pixels using the fetcher
+                    self.fetcher.tick(
+                        &self.vram,
+                        self.lcdc,
+                        self.scx,
+                        self.scy,
+                        self.ly,
+                        self.bgp,
+                    );
 
-                        // If FIFO has pixels, pop one and output it
-                        if !self.fetcher.get_bg_fifo().is_empty() {
-                            let pixel = self.fetcher.get_bg_fifo().remove(0); // Pop from front
-                            output_pixels.push((self.current_pixel_x, pixel));
-                            self.current_pixel_x += 1;
+                    // If FIFO has pixels, pop one and output it
+                    if !self.fetcher.get_bg_fifo().is_empty() {
+                        let pixel = self.fetcher.get_bg_fifo().remove(0); // Pop from front
+                        output_pixels.push((self.current_pixel_x, pixel));
+                        self.current_pixel_x += 1;
+                    }
+
+
+                    if self.current_pixel_x >= 160 { // Finished drawing scanline
+                        self.mode = PpuMode::HBlank;
+                        self.dots = 0;
+                        // Clear FIFOs for next scanline
+                        self.fetcher.clear_fifos();
+                    }
+                }
+                PpuMode::HBlank => {
+                    if self.dots >= 204 { // Mode 0 lasts 204 dots
+                        self.dots = 0;
+                        self.ly += 1;
+
+                        if self.ly == 144 { // End of visible screen, enter VBlank
+                            self.mode = PpuMode::VBlank;
+                            // TODO: Request VBlank interrupt
+                        } else { // Next scanline, go back to OAM Scan
+                            self.mode = PpuMode::OamScan;
                         }
                     }
                 }
+                PpuMode::VBlank => {
+                    if self.dots >= 456 { // VBlank scanline lasts 456 dots
+                        self.dots = 0;
+                        self.ly += 1;
 
-                if self.current_pixel_x >= 160 { // Finished drawing scanline
-                    self.mode = PpuMode::HBlank;
-                    self.cycles_in_mode = 0;
-                    // Clear FIFOs for next scanline
-                    self.fetcher.clear_fifos();
-                }
-            }
-            PpuMode::HBlank => {
-                if self.cycles_in_mode >= 204 { // Mode 0 lasts 204 cycles
-                    self.cycles_in_mode = 0;
-                    self.ly += 1;
-
-                    if self.ly == 144 { // End of visible screen, enter VBlank
-                        self.mode = PpuMode::VBlank;
-                        // TODO: Request VBlank interrupt
-                    } else { // Next scanline, go back to OAM Scan
-                        self.mode = PpuMode::OamScan;
-                    }
-                }
-            }
-            PpuMode::VBlank => {
-                if self.cycles_in_mode >= 456 { // VBlank scanline lasts 456 cycles
-                    self.cycles_in_mode = 0;
-                    self.ly += 1;
-
-                    if self.ly > 153 { // End of VBlank period, reset to scanline 0
-                        self.ly = 0;
-                        self.mode = PpuMode::OamScan;
+                        if self.ly > 153 { // End of VBlank period, reset to scanline 0
+                            self.ly = 0;
+                            self.mode = PpuMode::OamScan;
+                        }
                     }
                 }
             }

@@ -15,6 +15,8 @@ pub struct Fetcher {
     tile_data_high: u8,
     bg_fifo: Vec<Pixel>,
     oam_fifo: Vec<Pixel>,
+    dots: u8,
+    current_pixel_x: u8,
 }
 
 impl Fetcher {
@@ -26,24 +28,30 @@ impl Fetcher {
             tile_data_high: 0,
             bg_fifo: Vec::new(),
             oam_fifo: Vec::new(),
+            dots: 0,
+            current_pixel_x: 0,
         }
     }
 
-    // This method will take necessary PPU fields as arguments
-    pub fn fetch_pixel_data(
+    pub fn tick(
         &mut self,
         vram: &[u8],
         lcdc: u8,
         scx: u8,
         scy: u8,
         ly: u8,
-        current_pixel_x: u8,
         bgp: u8,
     ) {
+        self.dots += 1;
+        if self.dots < 2 {
+            return;
+        }
+        self.dots = 0;
+
         match self.fetcher_state {
             FetcherState::GetTileId => {
                 let tile_map_base = if (lcdc & 0x08) != 0 { 0x9C00 } else { 0x9800 };
-                let tile_x = (current_pixel_x + scx) / 8;
+                let tile_x = (self.current_pixel_x + scx) / 8;
                 let tile_y = (ly + scy) / 8;
                 let tile_map_addr = tile_map_base + (tile_y as u16 * 32) + tile_x as u16;
                 self.tile_id = vram[(tile_map_addr & 0x1FFF) as usize]; // Access vram directly
@@ -57,7 +65,7 @@ impl Fetcher {
                 let tile_addr = if (lcdc & 0x10) != 0 {
                     tile_data_base + (self.tile_id as u16 * 16) + (tile_row as u16 * 2)
                 } else {
-                    tile_data_base + (self.tile_id as u16 * 16) + (tile_row as u16 * 2)
+                    (0x9000i32 + (self.tile_id as i8 as i32 * 16) + (tile_row as i32 * 2)) as u16
                 };
 
                 self.tile_data_low = vram[(tile_addr & 0x1FFF) as usize]; // Access vram directly
@@ -70,13 +78,16 @@ impl Fetcher {
                 let tile_addr = if (lcdc & 0x10) != 0 {
                     tile_data_base + (self.tile_id as u16 * 16) + (tile_row as u16 * 2) + 1
                 } else {
-                    tile_data_base + (self.tile_id as u16 * 16) + (tile_row as u16 * 2) + 1
+                    (0x9000i32 + (self.tile_id as i8 as i32 * 16) + (tile_row as i32 * 2) + 1) as u16
                 };
 
                 self.tile_data_high = vram[(tile_addr & 0x1FFF) as usize]; // Access vram directly
                 self.fetcher_state = FetcherState::PushToFifo;
             }
             FetcherState::PushToFifo => {
+                if self.bg_fifo.len() > 8 {
+                    return;
+                }
                 for i in 0..8 {
                     let bit_low = (self.tile_data_low >> (7 - i)) & 0x01;
                     let bit_high = (self.tile_data_high >> (7 - i)) & 0x01;
