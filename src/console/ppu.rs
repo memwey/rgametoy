@@ -60,6 +60,10 @@ pub struct Ppu {
     pub ly: u8,
     window_line: u8,
     stat_line: bool,
+    /// Latched LY==LYC coincidence. Updated only while the LCD runs (the
+    /// comparison clock stops when it is off), so the STAT bit and its
+    /// interrupt freeze across a power-off and restart on power-on.
+    lyc_match: bool,
     frame_ready: bool,
 
     lcdc: u8, // 0xFF40
@@ -106,6 +110,7 @@ impl Ppu {
             ly: 0,
             window_line: 0,
             stat_line: false,
+            lyc_match: false,
             frame_ready: false,
             lcdc: 0,
             stat: 0,
@@ -209,6 +214,8 @@ impl Ppu {
                     }
                 }
             }
+            // The LY==LYC comparison clock runs only while the LCD is on.
+            self.lyc_match = self.ly == self.lyc;
             self.update_stat_line(&mut requested);
         }
         requested
@@ -223,7 +230,7 @@ impl Ppu {
             // The mode-2 (OAM) source is also asserted at the start of VBlank
             // (line 144), so a STAT interrupt fires together with VBlank.
             || (self.ly == SCREEN_HEIGHT as u8 && self.stat & 0x20 != 0)
-            || (self.ly == self.lyc && self.stat & 0x40 != 0)
+            || (self.lyc_match && self.stat & 0x40 != 0)
     }
 
     fn update_stat_line(&mut self, requested: &mut u8) {
@@ -523,7 +530,7 @@ impl Ppu {
         match addr {
             0xFF40 => self.lcdc,
             0xFF41 => {
-                let lyc = if self.ly == self.lyc { 0x04 } else { 0x00 };
+                let lyc = if self.lyc_match { 0x04 } else { 0x00 };
                 0x80 | (self.stat & 0x78) | lyc | self.mode as u8
             }
             0xFF42 => self.scy,
@@ -552,11 +559,14 @@ impl Ppu {
                     self.mode = PpuMode::HBlank;
                     self.window_line = 0;
                     self.stat_line = false;
+                    // The coincidence flag is retained while the LCD is off.
                 } else if !was_on && now_on {
                     self.ly = 0;
                     self.dots = 0;
                     self.mode = PpuMode::OamScan;
                     self.window_line = 0;
+                    // The comparison clock restarts on power-on.
+                    self.lyc_match = self.ly == self.lyc;
                 }
             }
             0xFF41 => self.stat = value & 0x78,
