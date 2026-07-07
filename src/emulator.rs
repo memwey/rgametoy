@@ -1,20 +1,30 @@
+use crate::cartridge::Cartridge;
 use crate::console::Console;
 use crate::display::Display;
-use crate::input::Input;
+use std::path::Path;
 
 pub struct Emulator {
     console: Console,
-    input: Input,
     display: Display,
+    prev_buttons: u8,
 }
 
 impl Emulator {
     pub fn new() -> Emulator {
         Emulator {
             console: Console::new(),
-            input: Input::new(),
             display: Display::new(),
+            prev_buttons: 0xFF,
         }
+    }
+
+    /// Load a `.gb` ROM from disk and boot into the DMG post-boot state.
+    pub fn load_rom<P: AsRef<Path>>(&mut self, path: P) -> std::io::Result<()> {
+        let data = std::fs::read(path)?;
+        let cartridge = Cartridge::from_bytes(data);
+        println!("Loaded ROM: \"{}\"", cartridge.title());
+        self.console.load_cartridge(cartridge);
+        Ok(())
     }
 
     pub fn run(&mut self) {
@@ -24,13 +34,18 @@ impl Emulator {
         }
     }
 
-    pub fn update_input(&mut self) {
-        let raw_button_state = self.input.get_raw_button_state();
-        self.console.get_p1().borrow_mut().update_button_state(raw_button_state);
-    }
-
-    pub fn get_input_mut(&mut self) -> &mut Input {
-        &mut self.input
+    fn update_input(&mut self) {
+        let buttons = self.display.poll_buttons();
+        // A bit going 1 (released) -> 0 (pressed) is a new key press.
+        let newly_pressed = self.prev_buttons & !buttons;
+        self.console
+            .get_p1()
+            .borrow_mut()
+            .update_button_state(buttons);
+        if newly_pressed != 0 {
+            self.console.request_joypad_interrupt();
+        }
+        self.prev_buttons = buttons;
     }
 
     pub fn get_console(&self) -> &Console {
@@ -40,6 +55,10 @@ impl Emulator {
     pub fn get_console_mut(&mut self) -> &mut Console {
         &mut self.console
     }
+}
 
-    // You might add methods here for rendering, loading ROMs, etc.
+impl Default for Emulator {
+    fn default() -> Self {
+        Self::new()
+    }
 }

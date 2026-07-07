@@ -1,24 +1,21 @@
-use crate::cpu::Cpu;
 use crate::bus::{Bus, MemoryBus};
-use crate::interrupts::InterruptType;
-use crate::lcd::Lcd;
+use crate::cartridge::Cartridge;
+use crate::cpu::Cpu;
 use crate::display::Display;
-use crate::p1::P1; // New import
-use crate::ppu::Ppu; // New import
-use crate::timer::Timer; // New import
-use std::rc::Rc; // New import
-use std::cell::RefCell; // New import
+use crate::interrupts::InterruptType;
+use crate::p1::P1;
+use crate::ppu::Ppu;
+use crate::timer::Timer;
+use std::cell::RefCell;
+use std::rc::Rc;
 
-// Game Boy operates at 4.194304 MHz, which is 4194304 cycles per second.
-// A frame is 1/60th of a second.
-// Cycles per frame = 4194304 / 60 = 69905.066...
-// For simplicity, we'll use 70224 cycles per frame (common in emulators)
+// The Game Boy runs at 4.194304 MHz. One frame is 154 scanlines × 456 dots =
+// 70224 T-cycles.
 const CYCLES_PER_FRAME: u64 = 70224;
 
 pub struct Console {
     cpu: Cpu,
     bus: MemoryBus,
-    lcd: Lcd,
     total_cycles: u64,
     p1: Rc<RefCell<P1>>,
     ppu: Rc<RefCell<Ppu>>,
@@ -34,7 +31,6 @@ impl Console {
         Console {
             cpu: Cpu::new(),
             bus: MemoryBus::new(Rc::clone(&p1), Rc::clone(&ppu), Rc::clone(&timer)),
-            lcd: Lcd::new(),
             total_cycles: 0,
             p1,
             ppu,
@@ -42,8 +38,45 @@ impl Console {
         }
     }
 
+    /// Inject a small program into ROM (used by tests).
     pub fn load_program(&mut self, program: &[u8]) {
-        self.cpu.load_program(&mut self.bus as &mut dyn Bus, program);
+        self.bus.load_rom(program);
+    }
+
+    /// Install a full cartridge and put the machine into its DMG post-boot
+    /// state (as if the internal boot ROM had already run).
+    pub fn load_cartridge(&mut self, cartridge: Cartridge) {
+        self.bus.load_cartridge(cartridge);
+        self.power_on();
+    }
+
+    /// Registers and I/O registers as left by the DMG boot ROM.
+    pub fn power_on(&mut self) {
+        self.cpu.set_af(0x01B0);
+        self.cpu.set_bc(0x0013);
+        self.cpu.set_de(0x00D8);
+        self.cpu.set_hl(0x014D);
+        self.cpu.set_sp(0xFFFE);
+        self.cpu.set_pc(0x0100);
+
+        let io_defaults: [(u16, u8); 12] = [
+            (0xFF05, 0x00), // TIMA
+            (0xFF06, 0x00), // TMA
+            (0xFF07, 0x00), // TAC
+            (0xFF40, 0x91), // LCDC: LCD on, BG on, tile data 0x8000
+            (0xFF42, 0x00), // SCY
+            (0xFF43, 0x00), // SCX
+            (0xFF45, 0x00), // LYC
+            (0xFF47, 0xFC), // BGP
+            (0xFF48, 0xFF), // OBP0
+            (0xFF49, 0xFF), // OBP1
+            (0xFF4A, 0x00), // WY
+            (0xFF4B, 0x00), // WX
+        ];
+        for (addr, value) in io_defaults {
+            self.bus.write_byte(addr, value);
+        }
+        self.bus.write_byte(0xFF0F, 0xE1);
     }
 
     pub fn step(&mut self) -> u8 {
@@ -52,41 +85,55 @@ impl Console {
         if self.timer.borrow_mut().tick(cycles) {
             self.bus.request_interrupt(InterruptType::Timer);
         }
-        
         cycles
     }
 
     pub fn run_frame(&mut self, display: &mut Display) {
-        let mut cycles_this_frame = 0;
+        let mut cycles_this_frame = 0u64;
         while cycles_this_frame < CYCLES_PER_FRAME {
-            let cycles_executed = self.step();
-            cycles_this_frame += cycles_executed as u64;
+            let cycles = self.step();
+            cycles_this_frame += cycles as u64;
 
-            // Tick the PPU and get pixel data
-            let pixel_data = self.ppu.borrow_mut().tick(cycles_executed);
-            let current_ly = self.ppu.borrow().ly;
-
-            // Process each pixel from PPU
-            for (_x, pixel) in pixel_data {
-                // Receive pixel and check if scanline is complete
-                if self.lcd.receive_pixel(pixel, current_ly) {
-                    // Scanline is complete, send it to display
-                    if current_ly < 144 { // Only send visible scanlines
-                        display.receive_scanline(current_ly, self.lcd.get_line_data());
-                    }
-                }
+            let ppu_interrupts = self.ppu.borrow_mut().tick(cycles);
+            if ppu_interrupts != 0 {
+                self.bus.request_interrupt_bits(ppu_interrupts);
             }
 
-            // Check if a full frame is ready (PPU enters VBlank)
-            if self.ppu.borrow().ly == 144 && self.ppu.borrow().get_mode() == crate::ppu::PpuMode::VBlank {
-                display.present_frame();
-                break; // Exit loop once a frame is ready
+            if self.ppu.borrow_mut().take_frame_ready() {
+                display.present(self.ppu.borrow().framebuffer());
+                break;
+            }
+        }
+    }
+
+    /// Advance the machine without a window, for headless testing. Returns the
+    /// number of frames completed.
+    pub fn run_frame_headless(&mut self) {
+        let mut cycles_this_frame = 0u64;
+        while cycles_this_frame < CYCLES_PER_FRAME {
+            let cycles = self.step();
+            cycles_this_frame += cycles as u64;
+
+            let ppu_interrupts = self.ppu.borrow_mut().tick(cycles);
+            if ppu_interrupts != 0 {
+                self.bus.request_interrupt_bits(ppu_interrupts);
+            }
+            if self.ppu.borrow_mut().take_frame_ready() {
+                break;
             }
         }
     }
 
     pub fn get_p1(&self) -> Rc<RefCell<P1>> {
         Rc::clone(&self.p1)
+    }
+
+    pub fn get_ppu(&self) -> Rc<RefCell<Ppu>> {
+        Rc::clone(&self.ppu)
+    }
+
+    pub fn request_joypad_interrupt(&mut self) {
+        self.bus.request_interrupt(InterruptType::Joypad);
     }
 
     pub fn get_cpu(&self) -> &Cpu {
@@ -99,5 +146,11 @@ impl Console {
 
     pub fn get_bus_mut(&mut self) -> &mut MemoryBus {
         &mut self.bus
+    }
+}
+
+impl Default for Console {
+    fn default() -> Self {
+        Self::new()
     }
 }

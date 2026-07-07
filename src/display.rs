@@ -1,63 +1,73 @@
-use crate::pixel::Pixel;
-use minifb::{Window, WindowOptions};
+use crate::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use minifb::{Key, Scale, Window, WindowOptions};
 
-const LCD_WIDTH: usize = 160;
-const LCD_HEIGHT: usize = 144;
+/// DMG grayscale palette: shade 0 is the lightest, shade 3 the darkest.
+const PALETTE: [u32; 4] = [0xFFE0F8D0, 0xFF88C070, 0xFF346856, 0xFF081820];
 
 pub struct Display {
     window: Window,
-    framebuffer: [u32; LCD_WIDTH * LCD_HEIGHT],
+    buffer: [u32; SCREEN_WIDTH * SCREEN_HEIGHT],
 }
 
 impl Display {
     pub fn new() -> Display {
-        let mut window = Window::new(
-            "rgametoy - ESC to exit",
-            LCD_WIDTH,
-            LCD_HEIGHT,
-            WindowOptions::default(),
-        )
-        .unwrap_or_else(|e| {
-            panic!("{}", e);
-        });
+        let options = WindowOptions {
+            scale: Scale::X4,
+            ..WindowOptions::default()
+        };
 
-        // Limit to 60 fps
+        let mut window = Window::new("rgametoy - ESC to exit", SCREEN_WIDTH, SCREEN_HEIGHT, options)
+            .unwrap_or_else(|e| panic!("{}", e));
+
+        // Limit to ~60 fps.
         window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
 
         Display {
             window,
-            framebuffer: [0; LCD_WIDTH * LCD_HEIGHT],
+            buffer: [PALETTE[0]; SCREEN_WIDTH * SCREEN_HEIGHT],
         }
     }
 
-    pub fn receive_scanline(&mut self, ly: u8, pixels: &[Pixel]) {
-        // Ensure ly is within valid range
-        if ly >= LCD_HEIGHT as u8 {
-            return;
+    /// Present a full frame given as 160×144 shade values (0-3).
+    pub fn present(&mut self, framebuffer: &[u8]) {
+        for (out, &shade) in self.buffer.iter_mut().zip(framebuffer.iter()) {
+            *out = PALETTE[(shade & 0x03) as usize];
         }
-        
-        let start_index = (ly as usize) * LCD_WIDTH;
-        // Define a simple grayscale palette
-        let palette: [u32; 4] = [
-            0xFF000000, // Shade 0: Black
-            0xFF555555, // Shade 1: Dark Gray
-            0xFFAAAAAA, // Shade 2: Light Gray
-            0xFFFFFFFF, // Shade 3: White
-        ];
-
-        for x in 0..LCD_WIDTH {
-            let shade = pixels[x].shade;
-            self.framebuffer[start_index + x] = palette[shade as usize];
-        }
-    }
-
-    pub fn present_frame(&mut self) {
         self.window
-            .update_with_buffer(&self.framebuffer, LCD_WIDTH, LCD_HEIGHT)
+            .update_with_buffer(&self.buffer, SCREEN_WIDTH, SCREEN_HEIGHT)
             .unwrap();
     }
 
     pub fn is_open(&self) -> bool {
-        self.window.is_open()
+        self.window.is_open() && !self.window.is_key_down(Key::Escape)
+    }
+
+    /// Read the host keyboard and return the raw Game Boy button state, using
+    /// the Input/P1 convention where a cleared bit means "pressed".
+    ///
+    /// bit0 Right, bit1 Left, bit2 Up, bit3 Down, bit4 A, bit5 B, bit6 Select,
+    /// bit7 Start.
+    pub fn poll_buttons(&self) -> u8 {
+        let mut state = 0xFFu8;
+        let mut press = |key: Key, bit: u8| {
+            if self.window.is_key_down(key) {
+                state &= !bit;
+            }
+        };
+        press(Key::Right, 0x01);
+        press(Key::Left, 0x02);
+        press(Key::Up, 0x04);
+        press(Key::Down, 0x08);
+        press(Key::Z, 0x10); // A
+        press(Key::X, 0x20); // B
+        press(Key::Backspace, 0x40); // Select
+        press(Key::Enter, 0x80); // Start
+        state
+    }
+}
+
+impl Default for Display {
+    fn default() -> Self {
+        Self::new()
     }
 }
