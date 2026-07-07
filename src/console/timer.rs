@@ -1,81 +1,116 @@
+//! Timer (DIV/TIMA/TMA/TAC), modelled on the real hardware: a 16-bit system
+//! counter whose upper byte is DIV, with TIMA clocked by the *falling edge* of
+//! a selected counter bit ANDed with the timer-enable. This reproduces the
+//! DIV-write and TAC-change glitches and the one-M-cycle TIMA reload delay.
+
 #[derive(Clone)]
 pub struct Timer {
-    div: u16, // Divider Register (0xFF04)
-    tima: u8, // Timer Counter (0xFF05)
-    tma: u8,  // Timer Modulo (0xFF06)
-    tac: u8,  // Timer Control (0xFF07)
-
-    // Internal counters for timing
-    div_counter: u16,
-    tima_counter: u16,
+    /// 16-bit system counter; DIV (0xFF04) is its upper byte.
+    counter: u16,
+    tima: u8, // 0xFF05
+    tma: u8,  // 0xFF06
+    tac: u8,  // 0xFF07 (lower 3 bits)
+    /// Previous state of the TIMA-increment input, for falling-edge detection.
+    prev_input: bool,
+    /// T-cycles until TIMA is reloaded from TMA after an overflow (0 = none).
+    /// TIMA reads 0 during this window.
+    reload_delay: u8,
 }
 
 impl Timer {
     pub fn new() -> Timer {
         Timer {
-            div: 0x0000,
-            tima: 0x00,
-            tma: 0x00,
-            tac: 0x00,
-            div_counter: 0x0000,
-            tima_counter: 0x0000,
+            counter: 0,
+            tima: 0,
+            tma: 0,
+            tac: 0,
+            prev_input: false,
+            reload_delay: 0,
         }
     }
 
+    /// Advance the timer by `cycles` T-cycles. Returns `true` if TIMA overflowed
+    /// and its interrupt should fire this step.
     pub fn tick(&mut self, cycles: u8) -> bool {
-        let mut interrupt_requested = false;
-
-        // Update DIV register (increments at 16384 Hz, so every 256 CPU cycles)
-        self.div_counter += cycles as u16;
-        if self.div_counter >= 256 {
-            self.div_counter -= 256;
-            self.div = self.div.wrapping_add(1);
-        }
-
-        // Check if timer is enabled (TAC bit 2)
-        if self.tac & 0x04 != 0 {
-            self.tima_counter += cycles as u16;
-
-            let clock_freq = match self.tac & 0x03 {
-                0b00 => 1024, // 4096 Hz (CPU / 1024)
-                0b01 => 16,   // 262144 Hz (CPU / 16)
-                0b10 => 64,   // 65536 Hz (CPU / 64)
-                0b11 => 256,  // 16384 Hz (CPU / 256)
-                _ => unreachable!(),
-            };
-
-            while self.tima_counter >= clock_freq {
-                self.tima_counter -= clock_freq;
-                // TIMA increments, if it overflows, reload from TMA and request interrupt
-                if self.tima == 0xFF {
+        let mut interrupt = false;
+        for _ in 0..cycles {
+            if self.reload_delay > 0 {
+                self.reload_delay -= 1;
+                if self.reload_delay == 0 {
                     self.tima = self.tma;
-                    interrupt_requested = true;
-                } else {
-                    self.tima = self.tima.wrapping_add(1);
+                    interrupt = true;
                 }
             }
+            self.counter = self.counter.wrapping_add(1);
+            self.update_edge();
         }
+        interrupt
+    }
 
-        interrupt_requested
+    /// The counter bit that drives TIMA, per TAC bits 0-1 (4096/262144/65536/
+    /// 16384 Hz).
+    fn timer_bit(&self) -> u16 {
+        match self.tac & 0x03 {
+            0b00 => 9,
+            0b01 => 3,
+            0b10 => 5,
+            _ => 7,
+        }
+    }
+
+    fn timer_input(&self) -> bool {
+        (self.tac & 0x04 != 0) && (self.counter >> self.timer_bit()) & 1 == 1
+    }
+
+    /// TIMA increments on the falling edge of the timer input.
+    fn update_edge(&mut self) {
+        let input = self.timer_input();
+        if self.prev_input && !input {
+            self.increment_tima();
+        }
+        self.prev_input = input;
+    }
+
+    fn increment_tima(&mut self) {
+        let (result, overflow) = self.tima.overflowing_add(1);
+        if overflow {
+            self.tima = 0; // reads 0 until the reload one M-cycle later
+            self.reload_delay = 4;
+        } else {
+            self.tima = result;
+        }
     }
 
     pub fn read_register(&self, addr: u16) -> u8 {
         match addr {
-            0xFF04 => (self.div >> 8) as u8, // Only upper 8 bits of DIV are readable
+            0xFF04 => (self.counter >> 8) as u8,
             0xFF05 => self.tima,
             0xFF06 => self.tma,
-            0xFF07 => self.tac,
-            _ => 0xFF, // Should not happen
+            0xFF07 => self.tac | 0xF8, // unused bits read as 1
+            _ => 0xFF,
         }
     }
 
     pub fn write_register(&mut self, addr: u16, value: u8) {
         match addr {
-            0xFF04 => self.div = 0, // Writing to DIV resets it
-            0xFF05 => self.tima = value,
+            0xFF04 => {
+                // Writing DIV resets the counter; if the timer input was high
+                // this is a falling edge (a spurious TIMA increment).
+                self.counter = 0;
+                self.update_edge();
+            }
+            0xFF05 => {
+                // Writing TIMA cancels a pending reload.
+                self.tima = value;
+                self.reload_delay = 0;
+            }
             0xFF06 => self.tma = value,
-            0xFF07 => self.tac = value & 0x07, // Only lower 3 bits are writable
-            _ => { /* Should not happen */ }
+            0xFF07 => {
+                self.tac = value & 0x07;
+                // Changing enable/frequency can also produce a falling edge.
+                self.update_edge();
+            }
+            _ => {}
         }
     }
 }
