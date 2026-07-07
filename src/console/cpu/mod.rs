@@ -146,17 +146,36 @@ impl Cpu {
     }
 
     /// Dispatch the highest-priority pending interrupt (5 M-cycles).
-    fn service_interrupt(&mut self, bus: &mut impl Bus, pending: u8) {
+    ///
+    /// The interrupt vector is only decided *after* the high byte of the return
+    /// address has been pushed: if `SP` points at `0xFFFF`, that push overwrites
+    /// `IE`, which can retarget the vector or — if it clears every enabled bit —
+    /// cancel the dispatch entirely and jump to `0x0000` (the `ie_push` quirk).
+    fn service_interrupt(&mut self, bus: &mut impl Bus, _pending: u8) {
         self.ime = false;
         self.tick(bus); // internal
         self.tick(bus); // internal
-        // The lowest set bit has the highest priority (VBlank first).
-        let bit = pending.trailing_zeros() as u8;
-        let if_reg = bus.read_byte(0xFF0F);
-        bus.write_byte(0xFF0F, if_reg & !(1 << bit));
-        self.push(bus, self.registers.pc); // 2 writes
+
+        // Push the high byte, then re-sample IE & IF to choose the vector.
+        self.registers.sp = self.registers.sp.wrapping_sub(1);
+        self.write(bus, self.registers.sp, (self.registers.pc >> 8) as u8);
+        let pending = bus.read_byte(0xFFFF) & bus.read_byte(0xFF0F) & 0x1F;
+
+        // Push the low byte.
+        self.registers.sp = self.registers.sp.wrapping_sub(1);
+        self.write(bus, self.registers.sp, self.registers.pc as u8);
+
+        if pending == 0 {
+            // Every enabled interrupt was cancelled mid-dispatch: vector to 0.
+            self.registers.pc = 0x0000;
+        } else {
+            // The lowest set bit has the highest priority (VBlank first).
+            let bit = pending.trailing_zeros() as u8;
+            let if_reg = bus.read_byte(0xFF0F);
+            bus.write_byte(0xFF0F, if_reg & !(1 << bit));
+            self.registers.pc = 0x0040 + (bit as u16) * 8;
+        }
         self.tick(bus); // set PC
-        self.registers.pc = 0x0040 + (bit as u16) * 8;
     }
 
     // --- Timing primitives: every access / internal delay ticks the system ---

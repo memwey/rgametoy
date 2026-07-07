@@ -15,6 +15,10 @@ pub struct Timer {
     /// T-cycles until TIMA is reloaded from TMA after an overflow (0 = none).
     /// TIMA reads 0 during this window.
     reload_delay: u8,
+    /// Set for the duration of the M-cycle in which TIMA was just reloaded from
+    /// TMA. While set, a TIMA write (which lands at the end of that same
+    /// M-cycle) is ignored — on hardware the reload wins over a same-cycle write.
+    just_reloaded: bool,
 }
 
 impl Timer {
@@ -26,6 +30,7 @@ impl Timer {
             tac: 0,
             prev_input: false,
             reload_delay: 0,
+            just_reloaded: false,
         }
     }
 
@@ -33,11 +38,15 @@ impl Timer {
     /// and its interrupt should fire this step.
     pub fn tick(&mut self, cycles: u8) -> bool {
         let mut interrupt = false;
+        // Fresh M-cycle: any reload guard only lasts until the write that lands
+        // at this M-cycle's end (see `just_reloaded`).
+        self.just_reloaded = false;
         for _ in 0..cycles {
             if self.reload_delay > 0 {
                 self.reload_delay -= 1;
                 if self.reload_delay == 0 {
                     self.tima = self.tma;
+                    self.just_reloaded = true;
                     interrupt = true;
                 }
             }
@@ -100,11 +109,21 @@ impl Timer {
                 self.update_edge();
             }
             0xFF05 => {
-                // Writing TIMA cancels a pending reload.
-                self.tima = value;
-                self.reload_delay = 0;
+                // A write on the exact reload cycle is ignored (the TMA reload
+                // wins); otherwise the write lands and cancels a pending reload.
+                if !self.just_reloaded {
+                    self.tima = value;
+                    self.reload_delay = 0;
+                }
             }
-            0xFF06 => self.tma = value,
+            0xFF06 => {
+                self.tma = value;
+                // TMA written on the exact reload cycle: TIMA takes the new
+                // value, since TMA is updated before it is latched into TIMA.
+                if self.just_reloaded {
+                    self.tima = value;
+                }
+            }
             0xFF07 => {
                 self.tac = value & 0x07;
                 // Changing enable/frequency can also produce a falling edge.
