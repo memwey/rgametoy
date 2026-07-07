@@ -3,6 +3,9 @@ pub mod cpu;
 pub mod bus;
 pub mod console;
 pub mod cartridge;
+pub mod apu;
+#[cfg(feature = "audio")]
+pub mod audio;
 pub mod p1;
 pub mod input;
 pub mod emulator;

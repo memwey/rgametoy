@@ -3,8 +3,15 @@ name = "rgametoy"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+# Real-time audio output via cpal. Off by default so the core stays
+# dependency-free; the APU always produces samples regardless.
+audio = ["dep:cpal"]
+
 [dependencies]
 minifb = "0.25"
+cpal = { version = "0.15", optional = true }
 
 [lib]
 name = "rgametoy"

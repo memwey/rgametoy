@@ -1,3 +1,4 @@
+use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 use crate::hram::Hram;
 use crate::interrupts::InterruptType;
@@ -21,13 +22,19 @@ pub struct MemoryBus {
     p1: Rc<RefCell<P1>>,
     ppu: Rc<RefCell<Ppu>>,
     timer: Rc<RefCell<Timer>>,
+    apu: Rc<RefCell<Apu>>,
     serial: [u8; 2], // 0xFF01 data, 0xFF02 control (stubbed)
     if_register: u8, // Interrupt Flag register (0xFF0F)
     ie_register: u8, // Interrupt Enable register (0xFFFF)
 }
 
 impl MemoryBus {
-    pub fn new(p1: Rc<RefCell<P1>>, ppu: Rc<RefCell<Ppu>>, timer: Rc<RefCell<Timer>>) -> MemoryBus {
+    pub fn new(
+        p1: Rc<RefCell<P1>>,
+        ppu: Rc<RefCell<Ppu>>,
+        timer: Rc<RefCell<Timer>>,
+        apu: Rc<RefCell<Apu>>,
+    ) -> MemoryBus {
         MemoryBus {
             cartridge: Cartridge::new(),
             wram: Wram::new(),
@@ -35,6 +42,7 @@ impl MemoryBus {
             p1,
             ppu,
             timer,
+            apu,
             serial: [0x00, 0x00],
             if_register: 0x00,
             ie_register: 0x00,
@@ -88,8 +96,9 @@ impl Bus for MemoryBus {
             0xFF02 => self.serial[1],
             0xFF04..=0xFF07 => self.timer.borrow().read_register(addr),
             0xFF0F => self.if_register | 0xE0, // top 3 bits read as 1
+            0xFF10..=0xFF3F => self.apu.borrow().read_register(addr),
             0xFF40..=0xFF4B => self.ppu.borrow().read_register(addr),
-            0xFF03 | 0xFF08..=0xFF0E | 0xFF10..=0xFF3F | 0xFF4C..=0xFF7F => 0xFF,
+            0xFF03 | 0xFF08..=0xFF0E | 0xFF4C..=0xFF7F => 0xFF,
             0xFF80..=0xFFFE => self.hram.read_byte(addr),
             0xFFFF => self.ie_register,
         }
@@ -109,12 +118,13 @@ impl Bus for MemoryBus {
             0xFF02 => self.serial[1] = value,
             0xFF04..=0xFF07 => self.timer.borrow_mut().write_register(addr, value),
             0xFF0F => self.if_register = value & 0x1F,
+            0xFF10..=0xFF3F => self.apu.borrow_mut().write_register(addr, value),
             0xFF46 => {
                 self.ppu.borrow_mut().write_register(addr, value);
                 self.oam_dma(value);
             }
             0xFF40..=0xFF4B => self.ppu.borrow_mut().write_register(addr, value),
-            0xFF03 | 0xFF08..=0xFF0E | 0xFF10..=0xFF3F | 0xFF4C..=0xFF7F => {}
+            0xFF03 | 0xFF08..=0xFF0E | 0xFF4C..=0xFF7F => {}
             0xFF80..=0xFFFE => self.hram.write_byte(addr, value),
             0xFFFF => self.ie_register = value,
         }

@@ -5,7 +5,8 @@
 ## 构建与运行
 
 ```sh
-cargo run --release -- path/to/rom.gb
+cargo run --release -- path/to/rom.gb              # 无声音,零额外依赖
+cargo run --release --features audio -- rom.gb     # 开启声音(引入 cpal)
 ```
 
 按键映射:方向键 = 方向键,`Z` = A,`X` = B,`Enter` = Start,`Backspace` = Select,`Esc` = 退出。
@@ -13,8 +14,11 @@ cargo run --release -- path/to/rom.gb
 支持的卡带:无 MBC (32KB)、MBC1、MBC3(不含 RTC)、MBC5,含外部 RAM 与 bank 切换。
 
 已实现:完整 SM83 指令集(含 CB 前缀)、中断(VBlank/STAT/Timer/Joypad)、Timer、
-PPU 扫描线渲染(背景 / 窗口 / 精灵)、OAM DMA、键盘输入。尚未实现:声音 (APU)、
-串口、存档持久化、亚扫描线级 (FIFO) 时序精度。
+PPU 扫描线渲染(背景 / 窗口 / 精灵)、OAM DMA、键盘输入、**APU 四声道声音**
+(方波 ×2 + 波形 + 噪声,含扫频 / 包络 / 长度计数器)。APU 仿真核心是纯 Rust、
+默认编译;真实音频输出通过 `audio` feature(cpal)开启,默认关闭。
+
+尚未实现:串口、存档持久化、亚扫描线级 (FIFO) 时序精度。
 
 ## 参考资料
 ### 技术手册

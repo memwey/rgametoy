@@ -1,3 +1,4 @@
+use crate::apu::Apu;
 use crate::bus::{Bus, MemoryBus};
 use crate::cartridge::Cartridge;
 use crate::cpu::Cpu;
@@ -20,6 +21,7 @@ pub struct Console {
     p1: Rc<RefCell<P1>>,
     ppu: Rc<RefCell<Ppu>>,
     timer: Rc<RefCell<Timer>>,
+    apu: Rc<RefCell<Apu>>,
 }
 
 impl Console {
@@ -27,14 +29,21 @@ impl Console {
         let p1 = Rc::new(RefCell::new(P1::new()));
         let ppu = Rc::new(RefCell::new(Ppu::new()));
         let timer = Rc::new(RefCell::new(Timer::new()));
+        let apu = Rc::new(RefCell::new(Apu::new()));
 
         Console {
             cpu: Cpu::new(),
-            bus: MemoryBus::new(Rc::clone(&p1), Rc::clone(&ppu), Rc::clone(&timer)),
+            bus: MemoryBus::new(
+                Rc::clone(&p1),
+                Rc::clone(&ppu),
+                Rc::clone(&timer),
+                Rc::clone(&apu),
+            ),
             total_cycles: 0,
             p1,
             ppu,
             timer,
+            apu,
         }
     }
 
@@ -85,6 +94,7 @@ impl Console {
         if self.timer.borrow_mut().tick(cycles) {
             self.bus.request_interrupt(InterruptType::Timer);
         }
+        self.apu.borrow_mut().tick(cycles);
         cycles
     }
 
@@ -130,6 +140,10 @@ impl Console {
 
     pub fn get_ppu(&self) -> Rc<RefCell<Ppu>> {
         Rc::clone(&self.ppu)
+    }
+
+    pub fn get_apu(&self) -> Rc<RefCell<Apu>> {
+        Rc::clone(&self.apu)
     }
 
     pub fn request_joypad_interrupt(&mut self) {

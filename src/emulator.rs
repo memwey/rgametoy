@@ -7,14 +7,33 @@ pub struct Emulator {
     console: Console,
     display: Display,
     prev_buttons: u8,
+    #[cfg(feature = "audio")]
+    audio: Option<crate::audio::AudioPlayer>,
 }
 
 impl Emulator {
     pub fn new() -> Emulator {
+        let console = Console::new();
+
+        #[cfg(feature = "audio")]
+        let audio = {
+            let player = crate::audio::AudioPlayer::new();
+            match &player {
+                Some(p) => {
+                    console.get_apu().borrow_mut().set_sample_rate(p.sample_rate());
+                    println!("audio: output at {} Hz", p.sample_rate());
+                }
+                None => eprintln!("audio: no output device found, running muted"),
+            }
+            player
+        };
+
         Emulator {
-            console: Console::new(),
+            console,
             display: Display::new(),
             prev_buttons: 0xFF,
+            #[cfg(feature = "audio")]
+            audio,
         }
     }
 
@@ -31,6 +50,16 @@ impl Emulator {
         while self.display.is_open() {
             self.update_input();
             self.console.run_frame(&mut self.display);
+
+            // Drain the APU each frame (keeps its buffer bounded even when
+            // there is no audio backend).
+            let samples = self.console.get_apu().borrow_mut().take_samples();
+            #[cfg(feature = "audio")]
+            if let Some(player) = &self.audio {
+                player.queue(&samples);
+            }
+            #[cfg(not(feature = "audio"))]
+            let _ = samples;
         }
     }
 
