@@ -185,10 +185,11 @@ impl Bus for MemoryBus {
     }
 
     fn read_byte(&self, addr: u16) -> u8 {
-        // While OAM DMA is running the CPU can only reach HRAM. The interrupt
-        // registers (IF/IE) are not on the blocked bus, and the CPU polls them
-        // every step, so they stay accessible.
-        if self.dma_remaining > 0 && addr < 0xFF80 && addr != 0xFF0F {
+        // While OAM DMA runs the CPU cannot reach the external bus or OAM, which
+        // read as open bus. I/O registers and HRAM are on the internal bus and
+        // stay readable (e.g. FF46 returns its last written value; IF/IE keep
+        // being polled) — matching the write block above.
+        if self.dma_remaining > 0 && addr < 0xFEA0 {
             return 0xFF;
         }
         self.read_raw(addr)
