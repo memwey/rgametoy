@@ -31,10 +31,11 @@ PPU 扫描线渲染(背景 / 窗口 / 精灵)、OAM DMA、串口(截获输出)�
 ### 测试 ROM 验证
 
 CPU 通过 Blargg 标准测试 ROM(经串口输出结果):`cpu_instrs`(全部 11 项)、
-`instr_timing` 均 **Passed**。用无头运行器跑任意测试 ROM:
+`instr_timing` 均 **Passed**;PPU 通过 **dmg-acid2**(渲染出完整参考笑脸)。
 
 ```sh
-cargo run --release --example run_serial -- path/to/test.gb
+cargo run --release --example run_serial -- path/to/test.gb   # 打印串口输出(Blargg)
+cargo run --release --example screenshot -- rom.gb out.bmp    # 无头渲染一帧到 BMP
 ```
 
 ## 参考资料
