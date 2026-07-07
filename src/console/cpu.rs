@@ -1,5 +1,5 @@
-use crate::bus::Bus;
-use crate::registers::Registers;
+use crate::console::bus::Bus;
+use crate::console::registers::Registers;
 
 /// The Sharp SM83 (LR35902) CPU core.
 ///

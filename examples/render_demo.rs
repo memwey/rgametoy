@@ -3,7 +3,7 @@
 //!
 //! Run with: `cargo run --example render_demo -- out.bmp`
 
-use rgametoy::ppu::{Ppu, SCREEN_HEIGHT, SCREEN_WIDTH};
+use rgametoy::console::ppu::{Ppu, SCREEN_HEIGHT, SCREEN_WIDTH};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 

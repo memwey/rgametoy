@@ -1,6 +1,6 @@
 extern crate rgametoy;
 
-use rgametoy::apu::Apu;
+use rgametoy::console::apu::Apu;
 
 /// Powered-on APU at full master volume with every channel panned to both
 /// sides.

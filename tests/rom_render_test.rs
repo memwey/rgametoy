@@ -1,6 +1,6 @@
 extern crate rgametoy;
 
-use rgametoy::cartridge::Cartridge;
+use rgametoy::console::cartridge::Cartridge;
 use rgametoy::console::Console;
 
 /// End-to-end: a hand-assembled ROM that boots at 0x0100, turns the LCD off,

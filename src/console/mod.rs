@@ -1,11 +1,23 @@
-use crate::apu::Apu;
-use crate::bus::{Bus, MemoryBus};
-use crate::cartridge::Cartridge;
-use crate::cpu::Cpu;
-use crate::interrupts::InterruptType;
-use crate::p1::P1;
-use crate::ppu::Ppu;
-use crate::timer::Timer;
+pub mod apu;
+pub mod bus;
+pub mod cartridge;
+pub mod cpu;
+pub mod hram;
+pub mod interrupts;
+pub mod joypad;
+pub mod ppu;
+pub mod registers;
+pub mod timer;
+pub mod wram;
+
+use crate::console::apu::Apu;
+use crate::console::bus::{Bus, MemoryBus};
+use crate::console::cartridge::Cartridge;
+use crate::console::cpu::Cpu;
+use crate::console::interrupts::InterruptType;
+use crate::console::joypad::P1;
+use crate::console::ppu::Ppu;
+use crate::console::timer::Timer;
 use std::cell::{Ref, RefCell};
 use std::rc::Rc;
 

@@ -1,6 +1,11 @@
-use crate::cartridge::Cartridge;
+pub mod display;
+pub mod input;
+#[cfg(feature = "audio")]
+pub mod audio;
+
+use crate::console::cartridge::Cartridge;
 use crate::console::Console;
-use crate::display::Display;
+use crate::emulator::display::Display;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -29,7 +34,7 @@ pub struct Emulator {
     /// `<rom>.sav` path, set only for battery-backed cartridges.
     save_path: Option<PathBuf>,
     #[cfg(feature = "audio")]
-    audio: Option<crate::audio::AudioPlayer>,
+    audio: Option<crate::emulator::audio::AudioPlayer>,
 }
 
 impl Emulator {
@@ -41,7 +46,7 @@ impl Emulator {
             // The core APU emits at its own fixed rate; the player resamples to
             // the device. The core is never told the device rate.
             let source_rate = console.get_apu().borrow().output_rate();
-            let player = crate::audio::AudioPlayer::new(source_rate);
+            let player = crate::emulator::audio::AudioPlayer::new(source_rate);
             match &player {
                 Some(p) => println!("audio: output at {} Hz", p.sample_rate()),
                 None => eprintln!("audio: no output device found, running muted"),
@@ -94,7 +99,7 @@ impl Emulator {
         while self.display.is_open() {
             let frame_start = Instant::now();
 
-            let input = crate::input::poll(&self.display);
+            let input = crate::emulator::input::poll(&self.display);
             self.apply_input(&input);
             let speed = if input.turbo { self.turbo_speed } else { 1.0 };
 
@@ -157,7 +162,7 @@ impl Emulator {
         }
     }
 
-    fn apply_input(&mut self, input: &crate::input::InputState) {
+    fn apply_input(&mut self, input: &crate::emulator::input::InputState) {
         // A bit going 1 (released) -> 0 (pressed) is a new key press.
         let newly_pressed = self.prev_buttons & !input.buttons;
         self.console

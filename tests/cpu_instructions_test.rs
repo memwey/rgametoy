@@ -1,6 +1,6 @@
 extern crate rgametoy;
 
-use rgametoy::bus::Bus;
+use rgametoy::console::bus::Bus;
 use rgametoy::console::Console;
 
 /// Build a console with `program` loaded at address 0x0000 and PC/SP at a

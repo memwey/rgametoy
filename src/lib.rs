@@ -1,17 +1,16 @@
-pub mod registers;
-pub mod cpu;
-pub mod bus;
+//! rgametoy — a DMG Game Boy emulator.
+//!
+//! The crate is split into two top-level modules that mirror the hardware /
+//! host boundary:
+//!
+//! - [`console`]: the emulated Game Boy (CPU, PPU, APU, timer, cartridge, …).
+//!   Deterministic and free of host I/O.
+//! - [`emulator`]: the host-facing frontend (window, scaling, input mapping,
+//!   audio backend, pacing, save files) that drives the console.
+
 pub mod console;
-pub mod cartridge;
-pub mod apu;
-#[cfg(feature = "audio")]
-pub mod audio;
-pub mod p1;
-pub mod input;
 pub mod emulator;
-pub mod interrupts;
-pub mod timer;
-pub mod ppu;
-pub mod wram;
-pub mod hram;
-pub mod display;
+
+// Façade re-exports for the two top-level types.
+pub use console::Console;
+pub use emulator::Emulator;

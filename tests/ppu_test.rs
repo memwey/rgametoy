@@ -1,6 +1,6 @@
 extern crate rgametoy;
 
-use rgametoy::ppu::{Ppu, PpuMode};
+use rgametoy::console::ppu::{Ppu, PpuMode};
 
 /// Enable the LCD (LCDC bit 7) so the PPU state machine runs.
 fn enabled_ppu() -> Ppu {

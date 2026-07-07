@@ -4,7 +4,7 @@
 //! key bindings separate from both the window (`Display`) and the emulated
 //! joypad hardware (`P1`).
 
-use crate::display::Display;
+use crate::emulator::display::Display;
 use minifb::Key;
 
 // Game Boy button bits, matching the byte P1 consumes: a set bit means the

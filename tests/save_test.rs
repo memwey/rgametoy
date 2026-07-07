@@ -1,7 +1,7 @@
 extern crate rgametoy;
 
-use rgametoy::bus::Bus;
-use rgametoy::cartridge::Cartridge;
+use rgametoy::console::bus::Bus;
+use rgametoy::console::cartridge::Cartridge;
 use rgametoy::console::Console;
 
 fn battery_rom() -> Vec<u8> {

@@ -3,7 +3,7 @@
 //!
 //! Run with: `cargo run --example apu_wav -- out.wav`
 
-use rgametoy::apu::{Apu, OUTPUT_RATE};
+use rgametoy::console::apu::{Apu, OUTPUT_RATE};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 

@@ -1,4 +1,4 @@
-use crate::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::console::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use minifb::{Key, Scale, Window, WindowOptions};
 
 /// Integer upscale factor. Each Game Boy pixel becomes a SCALE×SCALE block, so

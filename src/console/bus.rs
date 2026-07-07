@@ -1,11 +1,11 @@
-use crate::apu::Apu;
-use crate::cartridge::Cartridge;
-use crate::hram::Hram;
-use crate::interrupts::InterruptType;
-use crate::p1::P1;
-use crate::ppu::Ppu;
-use crate::timer::Timer;
-use crate::wram::Wram;
+use crate::console::apu::Apu;
+use crate::console::cartridge::Cartridge;
+use crate::console::hram::Hram;
+use crate::console::interrupts::InterruptType;
+use crate::console::joypad::P1;
+use crate::console::ppu::Ppu;
+use crate::console::timer::Timer;
+use crate::console::wram::Wram;
 use std::cell::RefCell;
 use std::rc::Rc;
 

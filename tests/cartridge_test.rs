@@ -1,6 +1,6 @@
 extern crate rgametoy;
 
-use rgametoy::cartridge::Cartridge;
+use rgametoy::console::cartridge::Cartridge;
 
 /// Build a 4-bank (64 KB) ROM whose first byte of each 16 KB bank is the bank
 /// index, declared as an MBC1 cartridge with 8 KB of RAM.
