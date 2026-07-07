@@ -2,15 +2,30 @@ use crate::cartridge::Cartridge;
 use crate::console::Console;
 use crate::display::Display;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Flush battery RAM to disk at most this often (in frames, ~2 s at 60 fps)
 /// while the game keeps writing saves.
 const AUTOSAVE_INTERVAL_FRAMES: u32 = 120;
 
+/// Real-time duration of one emulated frame at 1× speed: 70224 dots / 4.19 MHz.
+const FRAME_SECONDS: f64 = 70224.0 / 4_194_304.0;
+
+const DEFAULT_TURBO_SPEED: f64 = 4.0;
+
+/// Real-time budget for one emulated frame at the given speed multiplier.
+/// Higher speed → smaller budget → the loop sleeps less and emulation runs
+/// faster, while the work per frame (one PPU frame of CPU cycles) is fixed.
+fn frame_budget(speed: f64) -> Duration {
+    Duration::from_secs_f64(FRAME_SECONDS / speed.max(1e-3))
+}
+
 pub struct Emulator {
     console: Console,
     display: Display,
     prev_buttons: u8,
+    /// Speed multiplier applied while the fast-forward key is held.
+    turbo_speed: f64,
     /// `<rom>.sav` path, set only for battery-backed cartridges.
     save_path: Option<PathBuf>,
     #[cfg(feature = "audio")]
@@ -38,10 +53,16 @@ impl Emulator {
             console,
             display: Display::new(),
             prev_buttons: 0xFF,
+            turbo_speed: DEFAULT_TURBO_SPEED,
             save_path: None,
             #[cfg(feature = "audio")]
             audio,
         }
+    }
+
+    /// Set the fast-forward multiplier (clamped to at least 1×).
+    pub fn set_turbo_speed(&mut self, speed: f64) {
+        self.turbo_speed = speed.max(1.0);
     }
 
     /// Load a `.gb` ROM from disk and boot into the DMG post-boot state. For a
@@ -71,15 +92,23 @@ impl Emulator {
     pub fn run(&mut self) {
         let mut frames_since_save = 0u32;
         while self.display.is_open() {
+            let frame_start = Instant::now();
+
             self.update_input();
+            let turbo = self.display.turbo_held();
+            let speed = if turbo { self.turbo_speed } else { 1.0 };
+
+            // Emulate and present exactly one frame (one PPU frame of CPU work).
             self.console.run_frame(&mut self.display);
 
-            // Drain the APU each frame (keeps its buffer bounded even when
-            // there is no audio backend).
+            // Drain the APU each frame to keep its buffer bounded; while
+            // fast-forwarding we simply drop the (over-produced) samples.
             let samples = self.console.get_apu().borrow_mut().take_samples();
             #[cfg(feature = "audio")]
-            if let Some(player) = &self.audio {
-                player.queue(&samples);
+            if !turbo {
+                if let Some(player) = &self.audio {
+                    player.queue(&samples);
+                }
             }
             #[cfg(not(feature = "audio"))]
             let _ = samples;
@@ -88,6 +117,15 @@ impl Emulator {
             if frames_since_save >= AUTOSAVE_INTERVAL_FRAMES {
                 self.save_ram();
                 frames_since_save = 0;
+            }
+
+            // Pace emulation against the CPU clock: one frame should take
+            // FRAME_SECONDS / speed of real time. If we're behind (host too
+            // slow, or fast-forwarding flat out), don't sleep.
+            let elapsed = frame_start.elapsed();
+            let budget = frame_budget(speed);
+            if elapsed < budget {
+                std::thread::sleep(budget - elapsed);
             }
         }
         // Final flush on exit.
@@ -137,5 +175,23 @@ impl Emulator {
 impl Default for Emulator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_speed_frame_budget_is_one_gb_frame() {
+        let budget = frame_budget(1.0).as_secs_f64();
+        assert!((budget - 1.0 / 59.7275).abs() < 1e-4, "budget was {budget}");
+    }
+
+    #[test]
+    fn turbo_divides_the_budget_by_the_multiplier() {
+        let normal = frame_budget(1.0).as_secs_f64();
+        let turbo = frame_budget(4.0).as_secs_f64();
+        assert!((turbo * 4.0 - normal).abs() < 1e-6);
     }
 }

@@ -16,11 +16,10 @@ impl Display {
             ..WindowOptions::default()
         };
 
-        let mut window = Window::new("rgametoy - ESC to exit", SCREEN_WIDTH, SCREEN_HEIGHT, options)
+        // No internal rate limiter: the emulator paces itself against the CPU
+        // clock so it can also fast-forward.
+        let window = Window::new("rgametoy - ESC to exit", SCREEN_WIDTH, SCREEN_HEIGHT, options)
             .unwrap_or_else(|e| panic!("{}", e));
-
-        // Limit to ~60 fps.
-        window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
 
         Display {
             window,
@@ -40,6 +39,11 @@ impl Display {
 
     pub fn is_open(&self) -> bool {
         self.window.is_open() && !self.window.is_key_down(Key::Escape)
+    }
+
+    /// True while the fast-forward key (Tab) is held.
+    pub fn turbo_held(&self) -> bool {
+        self.window.is_key_down(Key::Tab)
     }
 
     /// Read the host keyboard and return the raw Game Boy button state, using
