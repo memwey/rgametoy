@@ -1,19 +1,22 @@
 //! Picture Processing Unit.
 //!
 //! The PPU runs a dot-accurate mode state machine (OAM scan → drawing →
-//! HBlank, then VBlank) that drives LY, the LYC compare, STAT mode bits and
-//! the VBlank / STAT interrupts. Visible lines are drawn with a scanline
-//! renderer (background, window and sprites) into an internal framebuffer of
-//! shade values, which the display blits to the window.
+//! HBlank, then VBlank) driving LY, LYC, STAT and the VBlank/STAT interrupts.
+//! Mode 3 is a per-dot **pixel FIFO** pipeline: a background/window fetcher
+//! fills the BG FIFO in the background while one pixel is shifted out per dot,
+//! merged with sprite pixels, run through the palettes and written to the
+//! framebuffer. Registers are sampled per dot, so mid-scanline changes take
+//! effect, and the length of mode 3 is emergent (it stretches for the SCX
+//! fine-scroll discard, sprites and the window).
+
+use std::collections::VecDeque;
 
 const VRAM_SIZE: usize = 0x2000; // 8 KB
 const OAM_SIZE: usize = 0xA0; // 160 bytes (0xFE00-0xFE9F)
 pub const SCREEN_WIDTH: usize = 160;
 pub const SCREEN_HEIGHT: usize = 144;
 
-// Dot counts for each phase of a scanline.
 const OAM_DOTS: u16 = 80;
-const DRAW_DOTS: u16 = 172;
 const LINE_DOTS: u16 = 456;
 
 // Interrupt request bits (matches the IF register layout).
@@ -28,6 +31,24 @@ pub enum PpuMode {
     Drawing = 3,
 }
 
+/// Background/window fetcher state (each step takes two dots).
+#[derive(PartialEq, Clone, Copy)]
+enum FetchState {
+    Tile,
+    DataLow,
+    DataHigh,
+    Push,
+}
+
+/// A pending sprite pixel in the object FIFO. The palette is resolved at output
+/// time (not merge time) so mid-line OBP changes are honoured.
+#[derive(Clone, Copy, Default)]
+struct ObjPixel {
+    color: u8, // 0 = transparent
+    use_obp1: bool,
+    priority: bool, // true = behind background colours 1-3
+}
+
 #[derive(Clone)]
 pub struct Ppu {
     vram: [u8; VRAM_SIZE],
@@ -37,15 +58,12 @@ pub struct Ppu {
     mode: PpuMode,
     dots: u16,
     pub ly: u8,
-    /// Internal window line counter (only advances on lines the window draws).
     window_line: u8,
-    /// Previous state of the (level-triggered) STAT interrupt line, for edge
-    /// detection.
     stat_line: bool,
     frame_ready: bool,
 
-    lcdc: u8, // 0xFF40 LCD Control
-    stat: u8, // 0xFF41 LCD Status (only the interrupt-enable bits are stored)
+    lcdc: u8, // 0xFF40
+    stat: u8, // 0xFF41 (interrupt-enable bits only)
     scy: u8,  // 0xFF42
     scx: u8,  // 0xFF43
     lyc: u8,  // 0xFF45
@@ -55,6 +73,25 @@ pub struct Ppu {
     obp1: u8, // 0xFF49
     wy: u8,   // 0xFF4A
     wx: u8,   // 0xFF4B
+
+    // --- Mode 3 pixel pipeline ---
+    draw_x: u8,
+    fetch_state: FetchState,
+    fetch_step: bool, // two-dot cadence
+    fetch_x: u8,
+    fetch_tile_id: u8,
+    fetch_lo: u8,
+    fetch_hi: u8,
+    bg_fifo: VecDeque<u8>,
+    obj_fifo: [ObjPixel; 8],
+    discard: u8, // SCX fine-scroll pixels still to drop
+    window_active: bool,
+    wy_triggered: bool,
+    line_sprites: [u8; 10], // OAM indices of sprites on this line
+    line_sprite_count: u8,
+    sprite_fetched: [bool; 10],
+    sprite_delay: u8,       // dots left in an in-progress sprite fetch
+    sprite_index: usize,    // line_sprites slot being fetched
 }
 
 impl Ppu {
@@ -80,6 +117,23 @@ impl Ppu {
             obp1: 0,
             wy: 0,
             wx: 0,
+            draw_x: 0,
+            fetch_state: FetchState::Tile,
+            fetch_step: false,
+            fetch_x: 0,
+            fetch_tile_id: 0,
+            fetch_lo: 0,
+            fetch_hi: 0,
+            bg_fifo: VecDeque::with_capacity(16),
+            obj_fifo: [ObjPixel::default(); 8],
+            discard: 0,
+            window_active: false,
+            wy_triggered: false,
+            line_sprites: [0; 10],
+            line_sprite_count: 0,
+            sprite_fetched: [false; 10],
+            sprite_delay: 0,
+            sprite_index: 0,
         }
     }
 
@@ -91,21 +145,18 @@ impl Ppu {
         self.mode
     }
 
-    /// The rendered frame as 160×144 shade values (0 = lightest, 3 = darkest).
     pub fn framebuffer(&self) -> &[u8] {
         &self.framebuffer
     }
 
-    /// Returns `true` exactly once per completed frame (at the moment the PPU
-    /// enters VBlank), clearing the flag so the next frame must set it again.
     pub fn take_frame_ready(&mut self) -> bool {
         let ready = self.frame_ready;
         self.frame_ready = false;
         ready
     }
 
-    /// Advance the PPU by `t_cycles` dots. Returns the set of interrupts
-    /// (VBlank / STAT) requested during this step, as IF-register bits.
+    /// Advance the PPU by `t_cycles` dots. Returns the interrupts (VBlank /
+    /// STAT) requested during this step, as IF-register bits.
     pub fn tick(&mut self, t_cycles: u8) -> u8 {
         if !self.lcd_enabled() {
             return 0;
@@ -116,13 +167,17 @@ impl Ppu {
             self.dots += 1;
             match self.mode {
                 PpuMode::OamScan => {
-                    if self.dots >= OAM_DOTS {
+                    if self.dots == OAM_DOTS {
+                        self.start_drawing();
                         self.mode = PpuMode::Drawing;
                     }
                 }
                 PpuMode::Drawing => {
-                    if self.dots >= OAM_DOTS + DRAW_DOTS {
-                        self.render_scanline();
+                    self.draw_dot();
+                    if self.draw_x as usize >= SCREEN_WIDTH {
+                        if self.window_active {
+                            self.window_line = self.window_line.wrapping_add(1);
+                        }
                         self.mode = PpuMode::HBlank;
                     }
                 }
@@ -132,7 +187,6 @@ impl Ppu {
                         self.ly += 1;
                         if self.ly == SCREEN_HEIGHT as u8 {
                             self.mode = PpuMode::VBlank;
-                            self.window_line = 0;
                             self.frame_ready = true;
                             requested |= INT_VBLANK;
                         } else {
@@ -146,6 +200,8 @@ impl Ppu {
                         self.ly += 1;
                         if self.ly > 153 {
                             self.ly = 0;
+                            self.window_line = 0;
+                            self.wy_triggered = false;
                             self.mode = PpuMode::OamScan;
                         }
                     }
@@ -156,7 +212,8 @@ impl Ppu {
         requested
     }
 
-    /// Level-triggered STAT interrupt source, per the current mode / LYC.
+    // --- STAT interrupt (level-triggered, rising-edge request) ---
+
     fn stat_condition(&self) -> bool {
         (self.mode == PpuMode::HBlank && self.stat & 0x08 != 0)
             || (self.mode == PpuMode::VBlank && self.stat & 0x10 != 0)
@@ -164,7 +221,6 @@ impl Ppu {
             || (self.ly == self.lyc && self.stat & 0x40 != 0)
     }
 
-    /// Request an LCDSTAT interrupt on the rising edge of the STAT line.
     fn update_stat_line(&mut self, requested: &mut u8) {
         let cond = self.stat_condition();
         if cond && !self.stat_line {
@@ -173,139 +229,233 @@ impl Ppu {
         self.stat_line = cond;
     }
 
-    // --- Scanline rendering -------------------------------------------------
+    // --- Mode 3 pixel pipeline ---------------------------------------------
 
-    // The pixel index drives scroll arithmetic and writes two arrays while
-    // calling `&self` tile helpers, so an iterator form doesn't fit here.
-    #[allow(clippy::needless_range_loop)]
-    fn render_scanline(&mut self) {
-        let ly = self.ly;
-        if ly as usize >= SCREEN_HEIGHT {
-            return;
+    fn start_drawing(&mut self) {
+        if self.ly == self.wy {
+            self.wy_triggered = true;
         }
-        let row_base = ly as usize * SCREEN_WIDTH;
-        // Background/window colour index (before palette) — needed for the
-        // object-to-background priority check.
-        let mut bg_color = [0u8; SCREEN_WIDTH];
-
-        // --- Background ---
-        if self.lcdc & 0x01 != 0 {
-            let map_base: usize = if self.lcdc & 0x08 != 0 { 0x1C00 } else { 0x1800 };
-            let signed = self.lcdc & 0x10 == 0;
-            let y = ly.wrapping_add(self.scy);
-            for x in 0..SCREEN_WIDTH {
-                let bx = (x as u8).wrapping_add(self.scx);
-                let tile_id = self.vram[map_base + (y / 8) as usize * 32 + (bx / 8) as usize];
-                let color = self.tile_color(tile_id, signed, y % 8, bx % 8);
-                bg_color[x] = color;
-                self.framebuffer[row_base + x] = shade(self.bgp, color);
-            }
-        } else {
-            for x in 0..SCREEN_WIDTH {
-                self.framebuffer[row_base + x] = 0;
-            }
-        }
-
-        // --- Window ---
-        if self.lcdc & 0x20 != 0 && ly >= self.wy && self.wx <= 166 {
-            let map_base: usize = if self.lcdc & 0x40 != 0 { 0x1C00 } else { 0x1800 };
-            let signed = self.lcdc & 0x10 == 0;
-            let wline = self.window_line;
-            let mut drew = false;
-            for x in 0..SCREEN_WIDTH {
-                if (x as u16 + 7) < self.wx as u16 {
-                    continue;
-                }
-                let win_x = (x as u16 + 7 - self.wx as u16) as u8;
-                let tile_id = self.vram[map_base + (wline / 8) as usize * 32 + (win_x / 8) as usize];
-                let color = self.tile_color(tile_id, signed, wline % 8, win_x % 8);
-                bg_color[x] = color;
-                self.framebuffer[row_base + x] = shade(self.bgp, color);
-                drew = true;
-            }
-            if drew {
-                self.window_line = self.window_line.wrapping_add(1);
-            }
-        }
-
-        // --- Sprites ---
-        if self.lcdc & 0x02 != 0 {
-            self.render_sprites(ly, row_base, &bg_color);
-        }
+        self.select_sprites();
+        self.draw_x = 0;
+        self.fetch_state = FetchState::Tile;
+        self.fetch_step = false;
+        self.fetch_x = 0;
+        self.fetch_tile_id = 0;
+        self.fetch_lo = 0;
+        self.fetch_hi = 0;
+        self.bg_fifo.clear();
+        self.obj_fifo = [ObjPixel::default(); 8];
+        self.discard = self.scx & 7;
+        self.window_active = false;
+        self.sprite_delay = 0;
     }
 
-    /// Decode one pixel of a background/window tile. `row`/`col` are 0..8.
-    fn tile_color(&self, tile_id: u8, signed: bool, row: u8, col: u8) -> u8 {
-        let tile_addr = if signed {
-            (0x1000_i32 + (tile_id as i8 as i32) * 16) as usize
-        } else {
-            tile_id as usize * 16
-        };
-        let lo = self.vram[tile_addr + row as usize * 2];
-        let hi = self.vram[tile_addr + row as usize * 2 + 1];
-        let bit = 7 - col;
-        ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1)
-    }
-
-    fn render_sprites(&mut self, ly: u8, row_base: usize, bg_color: &[u8; SCREEN_WIDTH]) {
-        let height: i16 = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
-
-        // Select up to 10 sprites overlapping this line, in OAM order.
-        let mut visible: Vec<usize> = Vec::with_capacity(10);
-        for i in 0..40 {
-            let sy = self.oam[i * 4] as i16 - 16;
-            if (ly as i16) >= sy && (ly as i16) < sy + height {
-                visible.push(i);
-                if visible.len() == 10 {
+    /// Select up to 10 sprites overlapping this line, in OAM order.
+    fn select_sprites(&mut self) {
+        self.line_sprite_count = 0;
+        self.sprite_fetched = [false; 10];
+        let height = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
+        for i in 0..40u8 {
+            let y = self.oam[i as usize * 4] as i16 - 16;
+            if (self.ly as i16) >= y && (self.ly as i16) < y + height {
+                self.line_sprites[self.line_sprite_count as usize] = i;
+                self.line_sprite_count += 1;
+                if self.line_sprite_count == 10 {
                     break;
                 }
             }
         }
+    }
 
-        // DMG priority: smaller X wins; ties broken by lower OAM index. Draw
-        // from lowest to highest priority so the winner ends up on top.
-        visible.sort_by(|&a, &b| {
-            let xa = self.oam[a * 4 + 1];
-            let xb = self.oam[b * 4 + 1];
-            xb.cmp(&xa).then(b.cmp(&a))
-        });
-
-        for &i in &visible {
-            let sy = self.oam[i * 4] as i16 - 16;
-            let sx = self.oam[i * 4 + 1] as i16 - 8;
-            let mut tile = self.oam[i * 4 + 2];
-            let attr = self.oam[i * 4 + 3];
-            let flip_x = attr & 0x20 != 0;
-            let flip_y = attr & 0x40 != 0;
-            let behind_bg = attr & 0x80 != 0;
-            let palette = if attr & 0x10 != 0 { self.obp1 } else { self.obp0 };
-
-            let mut row = (ly as i16 - sy) as u8;
-            if flip_y {
-                row = (height as u8) - 1 - row;
+    /// One dot of mode 3: advance the fetcher, then discard / start the window
+    /// / fetch a sprite / output a pixel as appropriate.
+    fn draw_dot(&mut self) {
+        // A sprite fetch pauses the background pipeline.
+        if self.sprite_delay > 0 {
+            self.sprite_delay -= 1;
+            if self.sprite_delay == 0 {
+                self.merge_sprite();
             }
-            if height == 16 {
-                tile &= 0xFE; // 8×16 objects ignore the low tile bit
-            }
-            let tile_addr = tile as usize * 16 + row as usize * 2;
-            let lo = self.vram[tile_addr];
-            let hi = self.vram[tile_addr + 1];
+            return;
+        }
 
-            for px in 0..8i16 {
-                let x = sx + px;
-                if x < 0 || x >= SCREEN_WIDTH as i16 {
-                    continue;
-                }
-                let bit = if flip_x { px as u8 } else { 7 - px as u8 };
-                let color = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                if color == 0 {
-                    continue; // transparent
-                }
-                if behind_bg && bg_color[x as usize] != 0 {
-                    continue; // background/window pixels 1-3 are in front
-                }
-                self.framebuffer[row_base + x as usize] = shade(palette, color);
+        self.advance_fetcher();
+
+        if self.bg_fifo.is_empty() {
+            return;
+        }
+
+        // SCX fine scroll: drop the first (SCX % 8) pixels of the line.
+        if self.discard > 0 {
+            self.bg_fifo.pop_front();
+            self.discard -= 1;
+            return;
+        }
+
+        // Switch the fetcher to the window when it is reached.
+        if !self.window_active && self.window_should_start() {
+            self.window_active = true;
+            self.bg_fifo.clear();
+            self.fetch_state = FetchState::Tile;
+            self.fetch_step = false;
+            self.fetch_x = 0;
+            return;
+        }
+
+        // A sprite at this X pauses output while it is fetched.
+        if self.lcdc & 0x02 != 0 {
+            if let Some(slot) = self.sprite_at(self.draw_x) {
+                self.sprite_index = slot;
+                self.sprite_fetched[slot] = true;
+                self.sprite_delay = 6;
+                return;
             }
+        }
+
+        // Output one pixel.
+        let bg = self.bg_fifo.pop_front().unwrap();
+        let obj = self.obj_fifo[0];
+        for i in 0..7 {
+            self.obj_fifo[i] = self.obj_fifo[i + 1];
+        }
+        self.obj_fifo[7] = ObjPixel::default();
+
+        let px = self.mix(bg, obj);
+        self.framebuffer[self.ly as usize * SCREEN_WIDTH + self.draw_x as usize] = px;
+        self.draw_x += 1;
+    }
+
+    fn window_should_start(&self) -> bool {
+        self.lcdc & 0x20 != 0
+            && self.wy_triggered
+            && self.wx <= 166
+            && self.draw_x as u16 + 7 >= self.wx as u16
+    }
+
+    /// Advance the background/window fetcher one two-dot step.
+    fn advance_fetcher(&mut self) {
+        self.fetch_step = !self.fetch_step;
+        if self.fetch_step {
+            return; // act on every second dot
+        }
+
+        match self.fetch_state {
+            FetchState::Tile => {
+                let (map_base, tile_x, tile_y) = if self.window_active {
+                    let map = if self.lcdc & 0x40 != 0 { 0x1C00 } else { 0x1800 };
+                    (map, self.fetch_x, self.window_line / 8)
+                } else {
+                    let map = if self.lcdc & 0x08 != 0 { 0x1C00 } else { 0x1800 };
+                    let tx = (self.scx / 8).wrapping_add(self.fetch_x) & 0x1F;
+                    let ty = self.ly.wrapping_add(self.scy) / 8;
+                    (map, tx, ty)
+                };
+                self.fetch_tile_id = self.vram[map_base + tile_y as usize * 32 + tile_x as usize];
+                self.fetch_state = FetchState::DataLow;
+            }
+            FetchState::DataLow => {
+                self.fetch_lo = self.vram[self.tile_data_addr()];
+                self.fetch_state = FetchState::DataHigh;
+            }
+            FetchState::DataHigh => {
+                self.fetch_hi = self.vram[self.tile_data_addr() + 1];
+                self.fetch_state = FetchState::Push;
+            }
+            FetchState::Push => {
+                if self.bg_fifo.is_empty() {
+                    for i in 0..8 {
+                        let bit = 7 - i;
+                        let color = ((self.fetch_hi >> bit) & 1) << 1 | ((self.fetch_lo >> bit) & 1);
+                        self.bg_fifo.push_back(color);
+                    }
+                    self.fetch_x = self.fetch_x.wrapping_add(1);
+                    self.fetch_state = FetchState::Tile;
+                }
+            }
+        }
+    }
+
+    fn tile_data_addr(&self) -> usize {
+        let row = if self.window_active {
+            self.window_line & 7
+        } else {
+            self.ly.wrapping_add(self.scy) & 7
+        };
+        let base = if self.lcdc & 0x10 != 0 {
+            self.fetch_tile_id as usize * 16
+        } else {
+            (0x1000_i32 + (self.fetch_tile_id as i8 as i32) * 16) as usize
+        };
+        base + row as usize * 2
+    }
+
+    /// First not-yet-fetched selected sprite whose left edge is at `draw_x`.
+    fn sprite_at(&self, draw_x: u8) -> Option<usize> {
+        for i in 0..self.line_sprite_count as usize {
+            if self.sprite_fetched[i] {
+                continue;
+            }
+            let x = self.oam[self.line_sprites[i] as usize * 4 + 1];
+            let trigger = x.saturating_sub(8);
+            if trigger == draw_x {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Merge the fetched sprite's 8 pixels into the object FIFO, filling only
+    /// transparent slots so earlier (higher-priority) sprites win.
+    fn merge_sprite(&mut self) {
+        let base = self.line_sprites[self.sprite_index] as usize * 4;
+        let y = self.oam[base] as i16 - 16;
+        let x = self.oam[base + 1] as i16 - 8;
+        let mut tile = self.oam[base + 2];
+        let attr = self.oam[base + 3];
+        let flip_x = attr & 0x20 != 0;
+        let flip_y = attr & 0x40 != 0;
+        let use_obp1 = attr & 0x10 != 0;
+        let priority = attr & 0x80 != 0;
+        let height: i16 = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
+
+        let mut row = self.ly as i16 - y;
+        if flip_y {
+            row = height - 1 - row;
+        }
+        if height == 16 {
+            tile &= 0xFE;
+        }
+        let addr = tile as usize * 16 + row as usize * 2;
+        let lo = self.vram[addr];
+        let hi = self.vram[addr + 1];
+
+        for p in 0..8i16 {
+            let slot = x + p - self.draw_x as i16;
+            if !(0..8).contains(&slot) {
+                continue;
+            }
+            let bit = if flip_x { p as u8 } else { 7 - p as u8 };
+            let color = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+            if color != 0 && self.obj_fifo[slot as usize].color == 0 {
+                self.obj_fifo[slot as usize] = ObjPixel {
+                    color,
+                    use_obp1,
+                    priority,
+                };
+            }
+        }
+    }
+
+    /// Mix a background colour and an object pixel to a shade, sampling the
+    /// palettes and LCDC live (so mid-line changes apply).
+    fn mix(&self, bg_color: u8, obj: ObjPixel) -> u8 {
+        // LCDC bit 0 clear blanks the background on DMG (colour 0).
+        let bg = if self.lcdc & 0x01 != 0 { bg_color } else { 0 };
+        if obj.color != 0 && (!obj.priority || bg == 0) {
+            let palette = if obj.use_obp1 { self.obp1 } else { self.obp0 };
+            shade(palette, obj.color)
+        } else {
+            shade(self.bgp, bg)
         }
     }
 
@@ -358,7 +508,6 @@ impl Ppu {
         match addr {
             0xFF40 => self.lcdc,
             0xFF41 => {
-                // Bit 7 reads 1; bits 0-2 report live mode / LYC state.
                 let lyc = if self.ly == self.lyc { 0x04 } else { 0x00 };
                 0x80 | (self.stat & 0x78) | lyc | self.mode as u8
             }
@@ -383,7 +532,6 @@ impl Ppu {
                 self.lcdc = value;
                 let now_on = self.lcd_enabled();
                 if was_on && !now_on {
-                    // Turning the LCD off resets the state machine and blanks LY.
                     self.ly = 0;
                     self.dots = 0;
                     self.mode = PpuMode::HBlank;
@@ -396,12 +544,12 @@ impl Ppu {
                     self.window_line = 0;
                 }
             }
-            0xFF41 => self.stat = value & 0x78, // only the interrupt-enable bits
+            0xFF41 => self.stat = value & 0x78,
             0xFF42 => self.scy = value,
             0xFF43 => self.scx = value,
-            0xFF44 => {} // LY is read-only
+            0xFF44 => {}
             0xFF45 => self.lyc = value,
-            0xFF46 => self.dma = value, // the transfer itself is done by the bus
+            0xFF46 => self.dma = value,
             0xFF47 => self.bgp = value,
             0xFF48 => self.obp0 = value,
             0xFF49 => self.obp1 = value,

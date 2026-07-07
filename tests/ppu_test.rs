@@ -104,6 +104,36 @@ fn ppu_renders_background_tile() {
     assert_eq!(fb[8], 0);
 }
 
+/// The pixel FIFO honours a palette change made *mid-scanline*: BGP is changed
+/// partway through line 0, so the left of the line uses the old palette and the
+/// right uses the new one. A scanline renderer (one register snapshot per line)
+/// could not produce this split.
+#[test]
+fn ppu_bgp_change_mid_scanline_splits_the_line() {
+    let mut ppu = Ppu::new();
+
+    // Tile 0: every pixel is colour index 1 (low plane all 1s, high plane 0).
+    for row in 0..8 {
+        ppu.write_vram(0x8000 + row * 2, 0xFF);
+        ppu.write_vram(0x8000 + row * 2 + 1, 0x00);
+    }
+    // Tile map is already all-zero -> tile 0 everywhere.
+    ppu.write_register(0xFF47, 0x0C); // BGP: colour 1 -> shade 3
+    ppu.write_register(0xFF40, 0x91); // LCD on, BG on, tile data 0x8000
+
+    // Drive line 0 dot by dot; switch BGP partway through pixel output.
+    for d in 0..300 {
+        ppu.tick(1);
+        if d == 180 {
+            ppu.write_register(0xFF47, 0x04); // BGP: colour 1 -> shade 1
+        }
+    }
+
+    let row0 = &ppu.framebuffer()[0..160];
+    assert!(row0.contains(&3), "left of the line used the old palette (shade 3)");
+    assert!(row0.contains(&1), "right of the line used the new palette (shade 1)");
+}
+
 /// A sprite (object) is drawn on top of the background.
 #[test]
 fn ppu_renders_sprite() {
