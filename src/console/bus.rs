@@ -8,10 +8,13 @@ use crate::console::serial::Serial;
 use crate::console::timer::Timer;
 use crate::console::wram::Wram;
 
-/// Minimal interface the CPU (the bus master) uses to reach memory.
+/// Minimal interface the CPU (the bus master) uses to reach memory and to
+/// advance the rest of the machine one M-cycle at a time.
 pub trait Bus {
     fn read_byte(&self, addr: u16) -> u8;
     fn write_byte(&mut self, addr: u16, value: u8);
+    /// Advance the memory-mapped peripherals by `cycles` T-cycles.
+    fn tick(&mut self, cycles: u8);
 }
 
 /// The system bus: it owns every memory-mapped component and routes the CPU's
@@ -50,21 +53,6 @@ impl MemoryBus {
             if_register: 0x00,
             ie_register: 0x00,
         }
-    }
-
-    /// Advance the memory-mapped peripherals by `cycles` T-cycles, folding any
-    /// interrupts they raise into the IF register.
-    pub fn tick(&mut self, cycles: u8) {
-        if self.timer.tick(cycles) {
-            self.if_register |= InterruptType::Timer.to_bit();
-        }
-        if self.serial.tick(cycles) {
-            self.if_register |= InterruptType::Serial.to_bit();
-        }
-        self.apu.tick(cycles);
-        let ppu_interrupts = self.ppu.tick(cycles);
-        self.if_register |= ppu_interrupts & 0x1F;
-        self.dma_remaining = self.dma_remaining.saturating_sub(cycles as u16);
     }
 
     /// Bytes the program has shifted out over the serial port (test-ROM output).
@@ -136,6 +124,21 @@ impl Default for MemoryBus {
 }
 
 impl Bus for MemoryBus {
+    /// Advance the memory-mapped peripherals by `cycles` T-cycles, folding any
+    /// interrupts they raise into the IF register.
+    fn tick(&mut self, cycles: u8) {
+        if self.timer.tick(cycles) {
+            self.if_register |= InterruptType::Timer.to_bit();
+        }
+        if self.serial.tick(cycles) {
+            self.if_register |= InterruptType::Serial.to_bit();
+        }
+        self.apu.tick(cycles);
+        let ppu_interrupts = self.ppu.tick(cycles);
+        self.if_register |= ppu_interrupts & 0x1F;
+        self.dma_remaining = self.dma_remaining.saturating_sub(cycles as u16);
+    }
+
     fn read_byte(&self, addr: u16) -> u8 {
         // While OAM DMA is running the CPU can only reach HRAM. The interrupt
         // registers (IF/IE) are not on the blocked bus, and the CPU polls them

@@ -12,11 +12,10 @@ pub use self::registers::Registers;
 
 /// The Sharp SM83 (LR35902) CPU core.
 ///
-/// Instruction execution is *instruction-stepped* and returns the number of
-/// T-cycles consumed. Every opcode of the base and `0xCB`-prefixed instruction
-/// sets is implemented with hardware-accurate flag behaviour and M-cycle
-/// timing. Interrupt dispatch, the `EI` one-instruction delay, `HALT`
-/// (including the halt bug) and `DI`/`EI` are handled in [`Cpu::step`].
+/// Execution is *cycle-stepped*: every memory access and every internal delay
+/// advances the rest of the system by one M-cycle (4 T-cycles) via
+/// [`Bus::tick`], so peripherals move within an instruction — not just between
+/// instructions. This makes read/write timing observable (Blargg `mem_timing`).
 ///
 /// The opcode decode lives in the sibling `execute` (base), `cb`
 /// (`0xCB`-prefixed) and `alu` submodules.
@@ -26,14 +25,14 @@ pub struct Cpu {
     /// Interrupt Master Enable.
     ime: bool,
     /// Countdown implementing the one-instruction delay of `EI`.
-    /// Set to 2 by `EI`; decremented at the start of each step; when it
-    /// reaches 0 the IME flag is enabled.
     ei_delay: u8,
     /// Set while the CPU is halted (waiting for an interrupt).
     halted: bool,
     /// Set when the "halt bug" is triggered: the byte following `HALT` is
     /// fetched without advancing the program counter, so it is executed twice.
     halt_bug: bool,
+    /// T-cycles consumed by the current step (accrued as the machine ticks).
+    cycles: u8,
 }
 
 impl Cpu {
@@ -44,6 +43,7 @@ impl Cpu {
             ei_delay: 0,
             halted: false,
             halt_bug: false,
+            cycles: 0,
         }
     }
 
@@ -107,6 +107,8 @@ impl Cpu {
     /// otherwise fetch and execute one instruction. Returns the number of
     /// T-cycles consumed.
     pub fn step(&mut self, bus: &mut impl Bus) -> u8 {
+        self.cycles = 0;
+
         // Apply the delayed effect of a previous `EI`.
         if self.ei_delay > 0 {
             self.ei_delay -= 1;
@@ -115,19 +117,22 @@ impl Cpu {
             }
         }
 
-        // A pending interrupt wakes the CPU from HALT and, if IME is set,
-        // is dispatched before the next instruction.
+        // A pending interrupt wakes the CPU from HALT and, if IME is set, is
+        // dispatched before the next instruction. Polling IF/IE does not
+        // consume a cycle, so raw (non-ticking) reads are used.
         let pending = bus.read_byte(0xFFFF) & bus.read_byte(0xFF0F) & 0x1F;
         if pending != 0 {
             self.halted = false;
             if self.ime {
-                return self.service_interrupt(bus, pending);
+                self.service_interrupt(bus, pending);
+                return self.cycles;
             }
         }
 
         if self.halted {
-            // The CPU is idle for one machine cycle while halted.
-            return 4;
+            // The CPU idles one machine cycle while halted.
+            self.tick(bus);
+            return self.cycles;
         }
 
         let opcode = self.fetch_byte(bus);
@@ -136,25 +141,44 @@ impl Cpu {
             self.halt_bug = false;
             self.registers.pc = self.registers.pc.wrapping_sub(1);
         }
-        self.execute(opcode, bus)
+        self.execute(opcode, bus);
+        self.cycles
     }
 
-    /// Dispatch the highest-priority pending interrupt.
-    fn service_interrupt(&mut self, bus: &mut impl Bus, pending: u8) -> u8 {
+    /// Dispatch the highest-priority pending interrupt (5 M-cycles).
+    fn service_interrupt(&mut self, bus: &mut impl Bus, pending: u8) {
         self.ime = false;
+        self.tick(bus); // internal
+        self.tick(bus); // internal
         // The lowest set bit has the highest priority (VBlank first).
         let bit = pending.trailing_zeros() as u8;
         let if_reg = bus.read_byte(0xFF0F);
         bus.write_byte(0xFF0F, if_reg & !(1 << bit));
-        self.push(bus, self.registers.pc);
+        self.push(bus, self.registers.pc); // 2 writes
+        self.tick(bus); // set PC
         self.registers.pc = 0x0040 + (bit as u16) * 8;
-        20
     }
 
-    // --- Fetch helpers (advance PC) ---
+    // --- Timing primitives: every access / internal delay ticks the system ---
+
+    /// Advance the rest of the machine by one M-cycle.
+    fn tick(&mut self, bus: &mut impl Bus) {
+        bus.tick(4);
+        self.cycles = self.cycles.wrapping_add(4);
+    }
+
+    fn read(&mut self, bus: &mut impl Bus, addr: u16) -> u8 {
+        self.tick(bus);
+        bus.read_byte(addr)
+    }
+
+    fn write(&mut self, bus: &mut impl Bus, addr: u16, value: u8) {
+        self.tick(bus);
+        bus.write_byte(addr, value);
+    }
 
     fn fetch_byte(&mut self, bus: &mut impl Bus) -> u8 {
-        let byte = bus.read_byte(self.registers.pc);
+        let byte = self.read(bus, self.registers.pc);
         self.registers.pc = self.registers.pc.wrapping_add(1);
         byte
     }
@@ -166,8 +190,9 @@ impl Cpu {
     }
 
     // --- Register-index helpers (B,C,D,E,H,L,(HL),A -> 0..=7) ---
+    // Index 6 accesses (HL) through memory, which ticks; the rest do not.
 
-    fn read_reg(&self, index: u8, bus: &mut impl Bus) -> u8 {
+    fn read_reg(&mut self, index: u8, bus: &mut impl Bus) -> u8 {
         match index {
             0 => self.registers.get_b(),
             1 => self.registers.get_c(),
@@ -175,7 +200,7 @@ impl Cpu {
             3 => self.registers.get_e(),
             4 => self.registers.get_h(),
             5 => self.registers.get_l(),
-            6 => bus.read_byte(self.registers.get_hl()),
+            6 => self.read(bus, self.registers.get_hl()),
             7 => self.registers.get_a(),
             _ => unreachable!(),
         }
@@ -189,7 +214,10 @@ impl Cpu {
             3 => self.registers.set_e(value),
             4 => self.registers.set_h(value),
             5 => self.registers.set_l(value),
-            6 => bus.write_byte(self.registers.get_hl(), value),
+            6 => {
+                let hl = self.registers.get_hl();
+                self.write(bus, hl, value);
+            }
             7 => self.registers.set_a(value),
             _ => unreachable!(),
         }
@@ -206,35 +234,41 @@ impl Cpu {
 
     fn push(&mut self, bus: &mut impl Bus, value: u16) {
         self.registers.sp = self.registers.sp.wrapping_sub(1);
-        bus.write_byte(self.registers.sp, (value >> 8) as u8);
+        self.write(bus, self.registers.sp, (value >> 8) as u8);
         self.registers.sp = self.registers.sp.wrapping_sub(1);
-        bus.write_byte(self.registers.sp, value as u8);
+        self.write(bus, self.registers.sp, value as u8);
     }
 
     fn pop(&mut self, bus: &mut impl Bus) -> u16 {
-        let lo = bus.read_byte(self.registers.sp) as u16;
+        let lo = self.read(bus, self.registers.sp) as u16;
         self.registers.sp = self.registers.sp.wrapping_add(1);
-        let hi = bus.read_byte(self.registers.sp) as u16;
+        let hi = self.read(bus, self.registers.sp) as u16;
         self.registers.sp = self.registers.sp.wrapping_add(1);
         (hi << 8) | lo
     }
 
-    // --- Control flow ---
+    // --- Control flow (internal M-cycles are included where the timing is
+    //     unconditional). ---
 
     fn jr(&mut self, offset: i8) {
         self.registers.pc = self.registers.pc.wrapping_add(offset as i16 as u16);
     }
 
+    /// CALL / RST: one internal M-cycle, then push the return address.
     fn call(&mut self, bus: &mut impl Bus, addr: u16) {
+        self.tick(bus);
         self.push(bus, self.registers.pc);
         self.registers.pc = addr;
     }
 
+    /// RET / RETI: pop the return address, then one internal M-cycle.
     fn ret(&mut self, bus: &mut impl Bus) {
-        self.registers.pc = self.pop(bus);
+        let addr = self.pop(bus);
+        self.tick(bus);
+        self.registers.pc = addr;
     }
 
-    fn halt(&mut self, bus: &mut impl Bus) -> u8 {
+    fn halt(&mut self, bus: &mut impl Bus) {
         let pending = bus.read_byte(0xFFFF) & bus.read_byte(0xFF0F) & 0x1F;
         if !self.ime && pending != 0 {
             // HALT with interrupts pending but disabled: the CPU does not halt
@@ -243,49 +277,39 @@ impl Cpu {
         } else {
             self.halted = true;
         }
-        4
     }
 
-    /// Conditional relative jump. The operand is always consumed.
-    fn jr_cond(&mut self, bus: &mut impl Bus, take: bool) -> u8 {
+    /// Conditional relative jump. The operand is always consumed; a taken
+    /// branch costs one extra internal M-cycle.
+    fn jr_cond(&mut self, bus: &mut impl Bus, take: bool) {
         let e = self.fetch_byte(bus) as i8;
         if take {
+            self.tick(bus);
             self.jr(e);
-            12
-        } else {
-            8
         }
     }
 
-    /// Conditional absolute jump. The operand is always consumed.
-    fn jp_cond(&mut self, bus: &mut impl Bus, take: bool) -> u8 {
+    fn jp_cond(&mut self, bus: &mut impl Bus, take: bool) {
         let addr = self.fetch_word(bus);
         if take {
+            self.tick(bus);
             self.registers.pc = addr;
-            16
-        } else {
-            12
         }
     }
 
-    /// Conditional call. The operand is always consumed.
-    fn call_cond(&mut self, bus: &mut impl Bus, take: bool) -> u8 {
+    fn call_cond(&mut self, bus: &mut impl Bus, take: bool) {
         let addr = self.fetch_word(bus);
         if take {
             self.call(bus, addr);
-            24
-        } else {
-            12
         }
     }
 
-    /// Conditional return.
-    fn ret_cond(&mut self, bus: &mut impl Bus, take: bool) -> u8 {
+    /// RET cc: one internal M-cycle to test the condition, then a normal RET if
+    /// taken.
+    fn ret_cond(&mut self, bus: &mut impl Bus, take: bool) {
+        self.tick(bus);
         if take {
             self.ret(bus);
-            20
-        } else {
-            8
         }
     }
 }

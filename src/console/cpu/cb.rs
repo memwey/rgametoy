@@ -5,8 +5,9 @@ use super::Cpu;
 use crate::console::bus::Bus;
 
 impl Cpu {
-    /// Execute a `0xCB`-prefixed opcode. Returns T-cycles consumed.
-    pub(super) fn execute_cb(&mut self, bus: &mut impl Bus) -> u8 {
+    /// Execute a `0xCB`-prefixed opcode. A `(HL)` operand ticks via
+    /// read_reg/write_reg, so no explicit cycle bookkeeping is needed.
+    pub(super) fn execute_cb(&mut self, bus: &mut impl Bus) {
         let cb = self.fetch_byte(bus);
         let index = cb & 0x07;
         let value = self.read_reg(index, bus);
@@ -27,12 +28,6 @@ impl Cpu {
 
         if !is_bit {
             self.write_reg(index, result, bus);
-        }
-
-        if index == 6 {
-            if is_bit { 12 } else { 16 }
-        } else {
-            8
         }
     }
 

@@ -87,9 +87,9 @@ impl Console {
     /// Fetch/execute one instruction (or service an interrupt), then advance
     /// the peripherals through the bus. Returns T-cycles consumed.
     pub fn step(&mut self) -> u8 {
+        // The CPU ticks the bus (peripherals) itself, per M-cycle, as it runs.
         let cycles = self.cpu.step(&mut self.bus);
         self.total_cycles += cycles as u64;
-        self.bus.tick(cycles);
         cycles
     }
 
