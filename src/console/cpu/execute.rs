@@ -5,7 +5,7 @@ use crate::console::bus::Bus;
 
 impl Cpu {
     /// Execute a single base (non-`CB`) opcode. Returns T-cycles consumed.
-    pub(super) fn execute(&mut self, opcode: u8, bus: &mut dyn Bus) -> u8 {
+    pub(super) fn execute(&mut self, opcode: u8, bus: &mut impl Bus) -> u8 {
         match opcode {
             // --- 0x00..=0x3F: misc / loads / 16-bit / jumps ---
             0x00 => 4, // NOP

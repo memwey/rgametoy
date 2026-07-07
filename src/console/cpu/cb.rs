@@ -6,7 +6,7 @@ use crate::console::bus::Bus;
 
 impl Cpu {
     /// Execute a `0xCB`-prefixed opcode. Returns T-cycles consumed.
-    pub(super) fn execute_cb(&mut self, bus: &mut dyn Bus) -> u8 {
+    pub(super) fn execute_cb(&mut self, bus: &mut impl Bus) -> u8 {
         let cb = self.fetch_byte(bus);
         let index = cb & 0x07;
         let value = self.read_reg(index, bus);

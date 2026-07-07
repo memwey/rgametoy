@@ -105,7 +105,7 @@ impl Cpu {
     /// Execute a single CPU step: service a pending interrupt if one is due,
     /// otherwise fetch and execute one instruction. Returns the number of
     /// T-cycles consumed.
-    pub fn step(&mut self, bus: &mut dyn Bus) -> u8 {
+    pub fn step(&mut self, bus: &mut impl Bus) -> u8 {
         // Apply the delayed effect of a previous `EI`.
         if self.ei_delay > 0 {
             self.ei_delay -= 1;
@@ -139,7 +139,7 @@ impl Cpu {
     }
 
     /// Dispatch the highest-priority pending interrupt.
-    fn service_interrupt(&mut self, bus: &mut dyn Bus, pending: u8) -> u8 {
+    fn service_interrupt(&mut self, bus: &mut impl Bus, pending: u8) -> u8 {
         self.ime = false;
         // The lowest set bit has the highest priority (VBlank first).
         let bit = pending.trailing_zeros() as u8;
@@ -152,13 +152,13 @@ impl Cpu {
 
     // --- Fetch helpers (advance PC) ---
 
-    fn fetch_byte(&mut self, bus: &mut dyn Bus) -> u8 {
+    fn fetch_byte(&mut self, bus: &mut impl Bus) -> u8 {
         let byte = bus.read_byte(self.registers.pc);
         self.registers.pc = self.registers.pc.wrapping_add(1);
         byte
     }
 
-    fn fetch_word(&mut self, bus: &mut dyn Bus) -> u16 {
+    fn fetch_word(&mut self, bus: &mut impl Bus) -> u16 {
         let lo = self.fetch_byte(bus) as u16;
         let hi = self.fetch_byte(bus) as u16;
         (hi << 8) | lo
@@ -166,7 +166,7 @@ impl Cpu {
 
     // --- Register-index helpers (B,C,D,E,H,L,(HL),A -> 0..=7) ---
 
-    fn read_reg(&self, index: u8, bus: &mut dyn Bus) -> u8 {
+    fn read_reg(&self, index: u8, bus: &mut impl Bus) -> u8 {
         match index {
             0 => self.registers.get_b(),
             1 => self.registers.get_c(),
@@ -180,7 +180,7 @@ impl Cpu {
         }
     }
 
-    fn write_reg(&mut self, index: u8, value: u8, bus: &mut dyn Bus) {
+    fn write_reg(&mut self, index: u8, value: u8, bus: &mut impl Bus) {
         match index {
             0 => self.registers.set_b(value),
             1 => self.registers.set_c(value),
@@ -203,14 +203,14 @@ impl Cpu {
 
     // --- Stack ---
 
-    fn push(&mut self, bus: &mut dyn Bus, value: u16) {
+    fn push(&mut self, bus: &mut impl Bus, value: u16) {
         self.registers.sp = self.registers.sp.wrapping_sub(1);
         bus.write_byte(self.registers.sp, (value >> 8) as u8);
         self.registers.sp = self.registers.sp.wrapping_sub(1);
         bus.write_byte(self.registers.sp, value as u8);
     }
 
-    fn pop(&mut self, bus: &mut dyn Bus) -> u16 {
+    fn pop(&mut self, bus: &mut impl Bus) -> u16 {
         let lo = bus.read_byte(self.registers.sp) as u16;
         self.registers.sp = self.registers.sp.wrapping_add(1);
         let hi = bus.read_byte(self.registers.sp) as u16;
@@ -224,16 +224,16 @@ impl Cpu {
         self.registers.pc = self.registers.pc.wrapping_add(offset as i16 as u16);
     }
 
-    fn call(&mut self, bus: &mut dyn Bus, addr: u16) {
+    fn call(&mut self, bus: &mut impl Bus, addr: u16) {
         self.push(bus, self.registers.pc);
         self.registers.pc = addr;
     }
 
-    fn ret(&mut self, bus: &mut dyn Bus) {
+    fn ret(&mut self, bus: &mut impl Bus) {
         self.registers.pc = self.pop(bus);
     }
 
-    fn halt(&mut self, bus: &mut dyn Bus) -> u8 {
+    fn halt(&mut self, bus: &mut impl Bus) -> u8 {
         let pending = bus.read_byte(0xFFFF) & bus.read_byte(0xFF0F) & 0x1F;
         if !self.ime && pending != 0 {
             // HALT with interrupts pending but disabled: the CPU does not halt
@@ -246,7 +246,7 @@ impl Cpu {
     }
 
     /// Conditional relative jump. The operand is always consumed.
-    fn jr_cond(&mut self, bus: &mut dyn Bus, take: bool) -> u8 {
+    fn jr_cond(&mut self, bus: &mut impl Bus, take: bool) -> u8 {
         let e = self.fetch_byte(bus) as i8;
         if take {
             self.jr(e);
@@ -257,7 +257,7 @@ impl Cpu {
     }
 
     /// Conditional absolute jump. The operand is always consumed.
-    fn jp_cond(&mut self, bus: &mut dyn Bus, take: bool) -> u8 {
+    fn jp_cond(&mut self, bus: &mut impl Bus, take: bool) -> u8 {
         let addr = self.fetch_word(bus);
         if take {
             self.registers.pc = addr;
@@ -268,7 +268,7 @@ impl Cpu {
     }
 
     /// Conditional call. The operand is always consumed.
-    fn call_cond(&mut self, bus: &mut dyn Bus, take: bool) -> u8 {
+    fn call_cond(&mut self, bus: &mut impl Bus, take: bool) -> u8 {
         let addr = self.fetch_word(bus);
         if take {
             self.call(bus, addr);
@@ -279,7 +279,7 @@ impl Cpu {
     }
 
     /// Conditional return.
-    fn ret_cond(&mut self, bus: &mut dyn Bus, take: bool) -> u8 {
+    fn ret_cond(&mut self, bus: &mut impl Bus, take: bool) -> u8 {
         if take {
             self.ret(bus);
             20
