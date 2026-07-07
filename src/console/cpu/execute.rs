@@ -190,7 +190,7 @@ impl Cpu {
             0xF0 => { let a8 = self.fetch_byte(bus); let v = self.read(bus, 0xFF00 + a8 as u16); self.registers.set_a(v); }
             0xF1 => { let v = self.pop(bus); self.registers.set_af(v); }
             0xF2 => { let v = self.read(bus, 0xFF00 + self.registers.get_c() as u16); self.registers.set_a(v); }
-            0xF3 => { self.ime = false; self.ei_delay = 0; } // DI
+            0xF3 => { self.ime = false; self.ime_pending = false; } // DI
             0xF5 => { self.tick(bus); self.push(bus, self.registers.get_af()); }
             0xF6 => { let v = self.fetch_byte(bus); self.or_a(v); }
             0xF7 => self.call(bus, 0x30),
@@ -202,7 +202,7 @@ impl Cpu {
             }
             0xF9 => { self.tick(bus); self.registers.sp = self.registers.get_hl(); }
             0xFA => { let addr = self.fetch_word(bus); let v = self.read(bus, addr); self.registers.set_a(v); }
-            0xFB => { self.ei_delay = 2; } // EI (enabled after the next instruction)
+            0xFB => { self.ime_pending = true; } // EI (enabled after the next instruction)
             0xFE => { let v = self.fetch_byte(bus); self.cp_a(v); }
             0xFF => self.call(bus, 0x38),
 

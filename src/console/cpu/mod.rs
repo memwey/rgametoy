@@ -24,8 +24,9 @@ pub struct Cpu {
     registers: Registers,
     /// Interrupt Master Enable.
     ime: bool,
-    /// Countdown implementing the one-instruction delay of `EI`.
-    ei_delay: u8,
+    /// Set by `EI`; `IME` becomes true after the *next* instruction retires
+    /// (the one-instruction delay). A later `DI` clears it before it takes hold.
+    ime_pending: bool,
     /// Set while the CPU is halted (waiting for an interrupt).
     halted: bool,
     /// Set when the "halt bug" is triggered: the byte following `HALT` is
@@ -40,7 +41,7 @@ impl Cpu {
         Cpu {
             registers: Registers::new(),
             ime: false,
-            ei_delay: 0,
+            ime_pending: false,
             halted: false,
             halt_bug: false,
             cycles: 0,
@@ -109,13 +110,10 @@ impl Cpu {
     pub fn step(&mut self, bus: &mut impl Bus) -> u8 {
         self.cycles = 0;
 
-        // Apply the delayed effect of a previous `EI`.
-        if self.ei_delay > 0 {
-            self.ei_delay -= 1;
-            if self.ei_delay == 0 {
-                self.ime = true;
-            }
-        }
+        // Capture whether an `EI` from the *previous* instruction is waiting to
+        // take effect. Its `IME` promotion happens after this instruction runs,
+        // so a chain of `EI`s still enables interrupts after just one step.
+        let ei_was_pending = self.ime_pending;
 
         // A pending interrupt wakes the CPU from HALT and, if IME is set, is
         // dispatched before the next instruction. Polling IF/IE does not
@@ -142,6 +140,13 @@ impl Cpu {
             self.registers.pc = self.registers.pc.wrapping_sub(1);
         }
         self.execute(opcode, bus);
+
+        // The delayed `EI` now takes effect — unless a `DI` in this very
+        // instruction cancelled it (which clears `ime_pending`).
+        if ei_was_pending && self.ime_pending {
+            self.ime = true;
+            self.ime_pending = false;
+        }
         self.cycles
     }
 
