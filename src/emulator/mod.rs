@@ -108,6 +108,14 @@ impl Emulator {
             self.console.run_frame();
             self.display.present(self.console.framebuffer());
 
+            // Forward serial output (test ROMs print their results here).
+            let serial = self.console.take_serial_output();
+            if !serial.is_empty() {
+                use std::io::Write;
+                print!("{}", String::from_utf8_lossy(&serial));
+                let _ = std::io::stdout().flush();
+            }
+
             // Drain the APU each frame to keep its buffer bounded. Only feed
             // the device at normal speed: off-speed produces the wrong number
             // of samples per real second, so we mute (drop) instead — which

@@ -4,6 +4,7 @@ use crate::console::hram::Hram;
 use crate::console::interrupts::InterruptType;
 use crate::console::joypad::P1;
 use crate::console::ppu::Ppu;
+use crate::console::serial::Serial;
 use crate::console::timer::Timer;
 use crate::console::wram::Wram;
 
@@ -25,7 +26,7 @@ pub struct MemoryBus {
     ppu: Ppu,
     timer: Timer,
     apu: Apu,
-    serial: [u8; 2], // 0xFF01 data, 0xFF02 control (stubbed)
+    serial: Serial,
     if_register: u8, // Interrupt Flag register (0xFF0F)
     ie_register: u8, // Interrupt Enable register (0xFFFF)
 }
@@ -40,7 +41,7 @@ impl MemoryBus {
             ppu: Ppu::new(),
             timer: Timer::new(),
             apu: Apu::new(),
-            serial: [0x00, 0x00],
+            serial: Serial::new(),
             if_register: 0x00,
             ie_register: 0x00,
         }
@@ -52,9 +53,17 @@ impl MemoryBus {
         if self.timer.tick(cycles) {
             self.if_register |= InterruptType::Timer.to_bit();
         }
+        if self.serial.tick(cycles) {
+            self.if_register |= InterruptType::Serial.to_bit();
+        }
         self.apu.tick(cycles);
         let ppu_interrupts = self.ppu.tick(cycles);
         self.if_register |= ppu_interrupts & 0x1F;
+    }
+
+    /// Bytes the program has shifted out over the serial port (test-ROM output).
+    pub fn take_serial_output(&mut self) -> Vec<u8> {
+        self.serial.take_output()
     }
 
     /// Returns `true` once per completed frame (consumes the flag).
@@ -126,8 +135,7 @@ impl Bus for MemoryBus {
             0xFE00..=0xFE9F => self.ppu.read_oam(addr),
             0xFEA0..=0xFEFF => 0xFF, // Not usable
             0xFF00 => self.p1.read_register(),
-            0xFF01 => self.serial[0],
-            0xFF02 => self.serial[1],
+            0xFF01 | 0xFF02 => self.serial.read_register(addr),
             0xFF04..=0xFF07 => self.timer.read_register(addr),
             0xFF0F => self.if_register | 0xE0, // top 3 bits read as 1
             0xFF10..=0xFF3F => self.apu.read_register(addr),
@@ -148,8 +156,7 @@ impl Bus for MemoryBus {
             0xFE00..=0xFE9F => self.ppu.write_oam(addr, value),
             0xFEA0..=0xFEFF => {} // Not usable
             0xFF00 => self.p1.write_register(value),
-            0xFF01 => self.serial[0] = value,
-            0xFF02 => self.serial[1] = value,
+            0xFF01 | 0xFF02 => self.serial.write_register(addr, value),
             0xFF04..=0xFF07 => self.timer.write_register(addr, value),
             0xFF0F => self.if_register = value & 0x1F,
             0xFF10..=0xFF3F => self.apu.write_register(addr, value),

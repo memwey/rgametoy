@@ -20,13 +20,22 @@ cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍
 带电池的卡带会把外部 RAM 存档持久化到与 ROM 同目录的 `<rom>.sav` 文件
 (启动时自动读回,运行中防抖落盘,退出时兜底保存)。
 
-已实现:完整 SM83 指令集(含 CB 前缀)、中断(VBlank/STAT/Timer/Joypad)、Timer、
-PPU 扫描线渲染(背景 / 窗口 / 精灵)、OAM DMA、键盘输入、电池存档 (`.sav`)、
+已实现:完整 SM83 指令集(含 CB 前缀)、中断(VBlank/STAT/Timer/Serial/Joypad)、Timer、
+PPU 扫描线渲染(背景 / 窗口 / 精灵)、OAM DMA、串口(截获输出)、键盘输入、电池存档 (`.sav`)、
 **APU 四声道声音**(方波 ×2 + 波形 + 噪声,含扫频 / 包络 / 长度计数器)。APU 仿真核心
 是纯 Rust、默认编译;真实音频输出通过 `audio` feature(cpal)开启,默认关闭。
 
-另外支持**快进/加速**(按住 Tab,倍率可配)。尚未实现:串口、存档即时快照 (save state)、
+另外支持**快进/加速**(按住 Tab,倍率可配)。尚未实现:存档即时快照 (save state)、
 亚扫描线级 (FIFO) 时序精度、MBC3 RTC。
+
+### 测试 ROM 验证
+
+CPU 通过 Blargg 标准测试 ROM(经串口输出结果):`cpu_instrs`(全部 11 项)、
+`instr_timing` 均 **Passed**。用无头运行器跑任意测试 ROM:
+
+```sh
+cargo run --release --example run_serial -- path/to/test.gb
+```
 
 ## 参考资料
 ### 技术手册

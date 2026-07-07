@@ -6,6 +6,7 @@ pub mod hram;
 pub mod interrupts;
 pub mod joypad;
 pub mod ppu;
+pub mod serial;
 pub mod timer;
 pub mod wram;
 
@@ -111,6 +112,11 @@ impl Console {
 
     pub fn audio_output_rate(&self) -> u32 {
         self.bus.audio_output_rate()
+    }
+
+    /// Bytes the program has printed over the serial port (test-ROM output).
+    pub fn take_serial_output(&mut self) -> Vec<u8> {
+        self.bus.take_serial_output()
     }
 
     /// Update the joypad button state (0 = pressed) and raise a Joypad
