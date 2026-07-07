@@ -74,7 +74,7 @@ cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲�
 
 渲染出完整参考笑脸(FIFO 重写前后字节一致,佐证渲染正确)。
 
-### 2.3 mooneye acceptance —— 40 / 75
+### 2.3 mooneye acceptance —— 41 / 75
 
 | 分组 | 成绩 | 备注 |
 |---|---|---|
@@ -85,9 +85,9 @@ cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲�
 | oam_dma | 1/3 | 挂 `reg_read`、`sources-GS` |
 | ppu | 2/12 | 挂全部 `intr_2_mode*`、`stat_lyc_onoff`、`lcdon_*` 等 |
 | serial | 0/1 | `boot_sclk_align`(需 boot 时序) |
-| root | 20/41 | 拆解见下 |
+| root | 21/41 | 拆解见下 |
 
-root 组 21 个失败按性质分三类:
+root 组 20 个失败按性质分两类:
 
 1. **Boot 状态(11 个,基本不在目标范围)**:`boot_regs-{dmg0,mgb,sgb,sgb2}`、
    `boot_div*`、`boot_hwio*`。校验的是**特定机型**开机后的寄存器/IO 状态,我们只做
@@ -95,10 +95,9 @@ root 组 21 个失败按性质分三类:
 2. **控制流读/内部时序(9 个)**:`call_timing`、`call_cc_timing`、`jp_timing`、
    `jp_cc_timing`、`ret_timing`、`ret_cc_timing`、`reti_timing`、`add_sp_e_timing`、
    `ld_hl_sp_e_timing`。见 §3。
-3. **`ei_sequence`(1 个)**:EI 生效时机的边界。
 
-本轮已修并转绿的控制流**写**时序测试(在 root 组内):`rst_timing`、`push_timing`、
-`call_timing2`、`call_cc_timing2`。
+本轮已修并转绿(root 组内):控制流**写**时序 `rst_timing`、`push_timing`、
+`call_timing2`、`call_cc_timing2`,以及 `ei_sequence`(EI 一指令延迟在连续 EI 下的正确性)。
 
 ### 2.4 mealybug tearoom(DMG)—— 0 / 24
 
@@ -135,20 +134,27 @@ timer 内部本就逐 T-cycle。差的是 **CPU 的写在 M-cycle 内哪一拍�
 TAC,毛刺增量取决于写落地那刻计数器选中位是 0 还是 1;压在位翻转边界上,差 1–2 个
 T-cycle 结果就差一次。杠杆在"总线写的精确 T 位置",不在 timer 本身。
 
-### 3.3 PPU 逐点时序(mooneye `ppu` 组 + mealybug mode-3)
-`intr_2_mode*`、`stat_lyc_onoff`、`lcdon_*`、mealybug 的 mode-3 类,测的是**模式在哪个
-dot 翻转、寄存器在哪个 dot 被锁存**。PPU 已逐点渲染,但这些锁存/翻转点的精确 dot 还没
-标定到位,属 PPU 侧的 T-cycle 前沿。
+### 3.3 PPU 组(mooneye `ppu` 10 挂 + mealybug mode-3)
+先说清楚:STAT 中断的**边沿检测(电平触发、上升沿才请求)已实现且正确**
+(`ppu.rs` 的 `update_stat_line`),所以这一组不是"STAT 逻辑没写"的问题。剩下的分两拨:
 
-### 3.4 `ei_sequence`
-EI 使能的延迟边界(EI 后一条指令才置 IME,与中断轮询点的精确对齐)。可 M-cycle 级
-表示,但需要细扣轮询时机,尚未验证。
+- **逐点(dot-precise)时序,难,属 T-cycle 前沿(约 8 个)**:`intr_2_mode0_timing`、
+  `intr_2_mode3_timing`、`intr_2_0_timing`、`intr_2_oam_ok_timing`、
+  `intr_2_mode0_timing_sprites`、`hblank_ly_scx_timing`、`lcdon_timing`、
+  `lcdon_write_timing`。测的是**模式在哪个 dot 翻转、STAT 在哪个 dot 触发**。我们的
+  mode 3 长度是 FIFO 里**涌现**出来的,还没标定到逐 dot 精确;`lcdon_*` 还要模拟开屏
+  首行的特殊时序。
+- **可能可控、但需改写入路径的逻辑怪癖(约 2 个)**:`stat_lyc_onoff`(写 STAT/LYC
+  要**当场重算** STAT 线,可能产生上升沿→中断)、`vblank_stat_intr`(进入 VBlank 的第
+  144 行会**顺带触发 mode 2/OAM 的 STAT 中断**)。这俩看着像纯逻辑,但 `write_register`
+  目前不回传中断,得给写入路径加管线(pending 标志或返回值),而且仍带 dot 敏感性和
+  **dmg-acid2 回归风险**——不像 EI 那样"改几行就干净",归为待评估。
 
-### 3.5 `oam_dma/reg_read`、`oam_dma/sources-GS`
+### 3.4 `oam_dma/reg_read`、`oam_dma/sources-GS`
 DMA 寄存器回读值、以及从不同源地址区(含冲突区)启动 DMA 的细节;与 §3.1 的总线冲突
 模型相关。
 
-### 3.6 Boot 状态(不在目标范围)
+### 3.5 Boot 状态(不在目标范围)
 `boot_regs`/`boot_div`/`boot_hwio` 的 `dmg0/mgb/sgb/sgb2` 变体校验特定机型开机态;我们
 只做 DMG 且不跑真实 boot ROM。DMG 变体(`*-dmgABC`)已过。
 
@@ -159,10 +165,11 @@ M-cycle 级(已过 / 可干净修)        亚 M-cycle / T-cycle 级(标定密集
 ──────────────────────────────────┼────────────────────────────────────────────
 Blargg cpu_instrs/instr/mem_timing  逐字节 DMA 总线冲突读(call/ret/reti/jp)
 dmg-acid2                           rapid_toggle(总线写的 T 位置)
-mooneye: bits/instr/interrupts      PPU intr_2_mode* / stat / lcdon
+mooneye: bits/instr/interrupts      PPU intr_2_mode* / hblank / lcdon
 timer(除 rapid_toggle)             mealybug mode-3(取数/寄存器锁存点)
-oam_dma_start/restart/timing        ei_sequence(轮询点对齐)
-rst/push/call2 等写时序
+oam_dma_start/restart/timing        ──待评估:PPU stat_lyc_onoff /
+rst/push/call2 等写时序               vblank_stat_intr(逻辑怪癖,需改写入路径)
+ei_sequence(EI 一指令延迟)
 ```
 
 ---
