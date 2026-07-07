@@ -74,7 +74,7 @@ cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲�
 
 渲染出完整参考笑脸(FIFO 重写前后字节一致,佐证渲染正确)。
 
-### 2.3 mooneye acceptance —— 46 / 75
+### 2.3 mooneye acceptance —— 49 / 75
 
 | 分组 | 成绩 | 备注 |
 |---|---|---|
@@ -83,7 +83,7 @@ cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲�
 | interrupts | 1/1 ✅ | `ie_push` 已修(压栈盖 IE 重算向量) |
 | oam_dma | 3/3 ✅ | `reg_read`(DMA 期间 I/O 仍可读)、`sources-GS`(源 E0-FF 读 WRAM 回声)已修 |
 | timer | 12/13 | 仅剩 `rapid_toggle` |
-| ppu | 5/12 | 已修 `hblank_ly_scx`、`intr_2_0`、`vblank_stat_intr`;挂 `intr_2_mode0/mode3/oam_ok`、`lcdon_*`、`stat_lyc_onoff` |
+| ppu | 8/12 | 已修 `hblank_ly_scx`、`intr_2_0/mode0/mode3/oam_ok`、`vblank_stat_intr`;挂 `intr_2_mode0_sprites`、`lcdon_*`、`stat_lyc_onoff` |
 | serial | 0/1 | `boot_sclk_align`(需 boot 时序) |
 | root | 21/41 | 拆解见下 |
 
@@ -133,21 +133,19 @@ timer 内部本就逐 T-cycle。差的是 **CPU 的写在 M-cycle 内哪一拍�
 TAC,毛刺增量取决于写落地那刻计数器选中位是 0 还是 1;压在位翻转边界上,差 1–2 个
 T-cycle 结果就差一次。杠杆在"总线写的精确 T 位置",不在 timer 本身。
 
-### 3.3 PPU 组(mooneye `ppu` 7 挂 + mealybug mode-3)
-STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。本轮又修好三个:
+### 3.3 PPU 组(mooneye `ppu` 4 挂 + mealybug mode-3)
+STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。本轮修好五个:
 
 - **`hblank_ly_scx_timing` + `intr_2_0_timing`**:此前 mode 3 长度只有 167 dot(裸 FIFO
   warmup),真机是 172。补上**固定 5-dot 取数启动 stall**后,mode 3 = 172 + (SCX&7) +
   精灵/窗口惩罚,HBlank 起点归位。像素不变(acid2 字节稳定),只是产出的 dot 时刻对齐。
 - **`vblank_stat_intr`**:第 144 行进 VBlank 时同时触发 mode 2/OAM 的 STAT 中断——把
   144 行并入 STAT 线条件即可。
+- **`intr_2_mode0/mode3/oam_ok_timing`**:见 §3.6——找到并修好了那个常量拍偏移。
 
-仍挂 7 个,都是**逐点(dot-precise)时序**:`intr_2_mode0/mode3/oam_ok_timing`、
-`intr_2_mode0_timing_sprites`、`lcdon_timing`、`lcdon_write_timing`、`stat_lyc_onoff`。
-- **intr_2 一簇**测"从 mode2 中断到 modeX 的精确 M-cycle 数"。我们的 mode2-int/mode3/
-  mode0 落点已是教科书值(dot 0 / 80 / 252)。根因是 **HALT 唤醒是 M-cycle 粒度**:PPU 在
-  dot 0 置 IF,而 halted 的 CPU 每步 tick(4)、在下一步边界才轮询,唤醒抖动 0–3 dot。这需要
-  **整体的 T-cycle 中断路径**(唤醒 + 派发 + 采样一起),不是点修——见 §3.6 的实验教训。
+仍挂 4 个:`intr_2_mode0_timing_sprites`(精灵的 OBJ mode-3 惩罚要精确,现为固定 6 dot 近似,
+改动有 acid2 回归风险)、`lcdon_timing` / `lcdon_write_timing`(开屏首行特殊时序,且要连本地
+`ppu_test` 一起改)、`stat_lyc_onoff`(见下)。
 - **`stat_lyc_onoff`**:已修**关屏时 LY=LYC 比较位冻结**(见 `fix(ppu): freeze LY==LYC`),
   还差开屏那一拍精确触发 STAT 中断(要给写入路径加中断管线)。
 - **`lcdon_*`**:开屏首行 line 0 从 mode 0 直接进 mode 3(跳过 mode 2)、且 PPU 晚 2 T——
@@ -169,42 +167,40 @@ STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。�
 ### M-cycle 级 ↔ 亚周期级 光谱
 
 ```
-M-cycle 级(已过 / 可干净修)        亚 M-cycle / T-cycle 级(标定密集、有回归风险)
+已过(含定向标定拿下的)              仍挂(标定密集、有回归风险)
 ──────────────────────────────────┼────────────────────────────────────────────
 Blargg cpu_instrs/instr/mem_timing  控制流读时序(call/ret/reti/jp)——读边界/采样拍
 dmg-acid2                           rapid_toggle(总线写的 T 位置)
-mooneye: bits/instr/interrupts      PPU intr_2_mode* / lcdon / stat_lyc_onoff
-timer(除 rapid_toggle)             mealybug mode-3(取数/寄存器锁存点)
-oam_dma 全组(start/restart/timing
-  /reg_read/sources)
-rst/push/call2 写时序
-ei_sequence;PPU mode-3 长度
-PPU hblank_ly_scx / vblank_stat_intr
+mooneye: bits/instr/interrupts      intr_2_mode0_sprites(OBJ mode-3 惩罚)
+oam_dma 全组                        lcdon_*(开屏首行特殊时序)
+timer(除 rapid_toggle)             stat_lyc_onoff(开屏那拍触发中断)
+rst/push/call2 写时序;ei_sequence   mealybug mode-3(取数/寄存器锁存点)
+PPU mode-3 长度 / hblank_ly_scx
+PPU vblank_stat_intr
+PPU intr_2_0/mode0/mode3/oam_ok  ← STAT mode 滞后 4 dot 标定
 ```
 
 > **T-cycle 迁移状态**:CPU 时间推进已收敛到单一 T-cycle seam(`Cpu::tick_t`,见
 > `refactor(cpu): T-cycle tick primitive`)。实测 CPU 的访存本就落在 M-cycle 内正确的
 > 末拍(≈T4,故 Blargg `mem_timing` 过),所以 CPU 的**访存**已 T-accurate。
 
-### 3.6 已量化的根因:中断观测的相位量化(intr_2 一簇)
-用 `ppu_probe` 实测:PPU 的 mode2-int / mode3 / mode0 落点是教科书值 **dot 0 / 80 / 252**
-(= mode2→mode0 恰好 63 M-cycle),**PPU 侧没有偏移**。用一次性 trace 跑真 ROM 实测
-`intr_2_mode0_timing` 的 handler→mode0 跨度,两轮之间**抖动 4 T-cycle(整整 1 个 M-cycle)**,
-而真机是确定值——这就是失败原因。
+### 3.6 已定位并修复:STAT mode 读数的常量拍偏移(intr_2 一簇)
+一段"证伪 → 定位 → 修复"的完整过程,值得记下方法:
 
-曾假设根因是"指令按 M-cycle 成块推进、观测相位量化",要靠**整颗 CPU 逐 T 步进**来修。
-**已实测证伪。** 我完整实现了 cycle-stepped 核(`tick_t` 逐 `bus.tick(1)` 推进 + 把 timer
-`just_reloaded` 守卫改成 `begin_m_cycle` 钩子 + T-cycle HALT 唤醒),跑全套 baseline diff:
+1. `ppu_probe` 实测 PPU 的 mode2-int / mode3 / mode0 落点是教科书值 **dot 0 / 80 / 252**,
+   **PPU 内部时序没偏**。
+2. 曾假设要靠**整颗 CPU 逐 T 步进**修。**实测证伪**:完整实现了 cycle-stepped 核(`tick_t`
+   逐 `bus.tick(1)` + timer 守卫改 `begin_m_cycle` 钩子 + T-cycle HALT 唤醒),结果对运行态
+   零变化、`intr_2` 仍全挂、且 T-cycle HALT 唤醒还回归了 `hblank`。**结论:CPU 结构不是瓶颈。**
+3. 关键观察:`intr_2_0_timing`(测 mode2 中断本身)**过**,而 `intr_2_mode0/mode3/oam_ok`
+   (测从 mode2 中断到"STAT 读到 modeX / OAM 可访问")**挂**。所以偏移在**软件观测到 mode 的
+   时刻**,不在中断、不在内部转换。`hblank`(相对测量)对常量偏移免疫,故一直过。
+4. **修复**:真机上 STAT 寄存器的 mode 位、以及 OAM/VRAM 锁,都比内部 mode 转换**晚约 4 dot**。
+   加 `prev_mode` / `transition_age`,用 `visible_mode()`(滞后 4 dot)供 STAT 读和 OAM 访问判定
+   ——`intr_2_mode0/mode3/oam_ok` 三个全绿,acid2 字节不变,无回归(见 `fix(ppu): STAT mode
+   bits ... lag ... 4 dots`)。
 
-- 对**运行态是零变化**(除 hblank 外其余 44 项完全不动),证明 M-cycle 成块推进 ≡ 逐 T 推进;
-- `intr_2_*` **仍然全挂**——cycle-stepped 核**没修好它**;
-- T-cycle HALT 唤醒**回归了 `hblank_ly_scx`**(净 46→45),说明现有的 **M-cycle HALT 唤醒
-  其实是对的**(`hblank` / `halt_*` 都靠它过)。
-
-**修正结论:M-cycle vs T-cycle 的 CPU 结构不是 `intr_2` 的瓶颈,大重写也救不了它。** PPU 侧的
-mode 落点是教科书值,`hblank`(相对测量)又过,所以差的是 **STAT 中断 / mode 寄存器读数的某个
-常量拍偏移**(常量差会被 `hblank` 的相对测量抵消,却会让 `intr_2` 的绝对测量挂)。要修需要
-**精确的硬件参考拍值**来标定这个偏移(如 Gekkio gb-ctr 的 STAT 时序表),属定向标定、非架构改动。
+教训:别急着上大重写;先用 probe/trace 把偏移**量化**,常常是外设的一个常量拍。
 
 ---
 
