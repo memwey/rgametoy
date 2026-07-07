@@ -192,17 +192,19 @@ PPU hblank_ly_scx / vblank_stat_intr
 `intr_2_mode0_timing` 的 handler→mode0 跨度,两轮之间**抖动 4 T-cycle(整整 1 个 M-cycle)**,
 而真机是确定值——这就是失败原因。
 
-根因:**指令按 M-cycle 成块推进(每次 `tick(4)` 把 PPU 一次推 4 dot),而 PPU 是逐 dot 的**;
-halted 的 CPU 只在 M-cycle 边界轮询中断,于是"何时观测到 mode2-int"被量化到 ±1 M-cycle,
-两轮的相位不同→抖 4T。这解释了为什么:
-- `hblank_ly_scx` **过**——它是 SCX 之间的**相对**测量,常量相位差会抵消;
-- `intr_2_*` **挂**——它是**绝对**跨度,相位差不抵消。
+曾假设根因是"指令按 M-cycle 成块推进、观测相位量化",要靠**整颗 CPU 逐 T 步进**来修。
+**已实测证伪。** 我完整实现了 cycle-stepped 核(`tick_t` 逐 `bus.tick(1)` 推进 + 把 timer
+`just_reloaded` 守卫改成 `begin_m_cycle` 钩子 + T-cycle HALT 唤醒),跑全套 baseline diff:
 
-试过的 "T-cycle HALT 唤醒" 之所以回归 `hblank`:唤醒后 CPU 相位偏移,后续指令仍按 4-dot 成块
-推进,把相位不一致带进了 `hblank` 的相对测量。**结论:要修得让整颗 CPU 逐 T 步进(观测相位连续)**,
-且要连带重做 **timer 的 `just_reloaded` 守卫**(现依赖 M-cycle 原子 `tick(4)`)。这是一次**大而
-互相耦合的重写**(T-cycle 总线 + timer 守卫 + 中断/HALT 路径),无法拆成可逐步验证的原子改动,
-故列为专项工作,起点是已就位的 `tick_t` seam。
+- 对**运行态是零变化**(除 hblank 外其余 44 项完全不动),证明 M-cycle 成块推进 ≡ 逐 T 推进;
+- `intr_2_*` **仍然全挂**——cycle-stepped 核**没修好它**;
+- T-cycle HALT 唤醒**回归了 `hblank_ly_scx`**(净 46→45),说明现有的 **M-cycle HALT 唤醒
+  其实是对的**(`hblank` / `halt_*` 都靠它过)。
+
+**修正结论:M-cycle vs T-cycle 的 CPU 结构不是 `intr_2` 的瓶颈,大重写也救不了它。** PPU 侧的
+mode 落点是教科书值,`hblank`(相对测量)又过,所以差的是 **STAT 中断 / mode 寄存器读数的某个
+常量拍偏移**(常量差会被 `hblank` 的相对测量抵消,却会让 `intr_2` 的绝对测量挂)。要修需要
+**精确的硬件参考拍值**来标定这个偏移(如 Gekkio gb-ctr 的 STAT 时序表),属定向标定、非架构改动。
 
 ---
 
