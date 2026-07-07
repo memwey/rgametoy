@@ -117,7 +117,14 @@ impl MemoryBus {
     /// difference from a byte-by-byte transfer, and OAM holds the new data by
     /// the time the window closes.
     fn start_oam_dma(&mut self) {
-        let source = (self.dma_source as u16) << 8;
+        // Source pages E0-FF read the WRAM echo (the transfer does not see the
+        // OAM/IO map), so they mirror C0-DF.
+        let page = if self.dma_source >= 0xE0 {
+            self.dma_source - 0x20
+        } else {
+            self.dma_source
+        };
+        let source = (page as u16) << 8;
         for i in 0..0xA0u16 {
             // Read past the DMA block: the transfer's own source fetches are
             // never blocked (this is the DMA unit acting as bus master).
