@@ -74,15 +74,15 @@ cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲�
 
 渲染出完整参考笑脸(FIFO 重写前后字节一致,佐证渲染正确)。
 
-### 2.3 mooneye acceptance —— 44 / 75
+### 2.3 mooneye acceptance —— 46 / 75
 
 | 分组 | 成绩 | 备注 |
 |---|---|---|
 | bits | 3/3 ✅ | |
 | instr | 1/1 ✅ | |
 | interrupts | 1/1 ✅ | `ie_push` 已修(压栈盖 IE 重算向量) |
+| oam_dma | 3/3 ✅ | `reg_read`(DMA 期间 I/O 仍可读)、`sources-GS`(源 E0-FF 读 WRAM 回声)已修 |
 | timer | 12/13 | 仅剩 `rapid_toggle` |
-| oam_dma | 1/3 | 挂 `reg_read`、`sources-GS` |
 | ppu | 5/12 | 已修 `hblank_ly_scx`、`intr_2_0`、`vblank_stat_intr`;挂 `intr_2_mode0/mode3/oam_ok`、`lcdon_*`、`stat_lyc_onoff` |
 | serial | 0/1 | `boot_sclk_align`(需 boot 时序) |
 | root | 21/41 | 拆解见下 |
@@ -144,14 +144,23 @@ STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。�
 
 仍挂 7 个,都是**逐点(dot-precise)时序**:`intr_2_mode0/mode3/oam_ok_timing`、
 `intr_2_mode0_timing_sprites`、`lcdon_timing`、`lcdon_write_timing`、`stat_lyc_onoff`。
-其中 intr_2 一簇测"从 mode2 中断到 modeX 的精确 M-cycle 数"——我们的 mode2-int/mode3/
-mode0 落点已是教科书值(dot 0 / 80 / 252),差的是更细的采样拍偏移,缺权威参考数难标定;
-`lcdon_*` 要模拟开屏首帧特殊时序;`stat_lyc_onoff` 要模拟**关屏时 LY=LYC 比较位冻结**、
-开屏重启比较的行为。
+- **intr_2 一簇**测"从 mode2 中断到 modeX 的精确 M-cycle 数"。我们的 mode2-int/mode3/
+  mode0 落点已是教科书值(dot 0 / 80 / 252)。根因是 **HALT 唤醒是 M-cycle 粒度**:PPU 在
+  dot 0 置 IF,而 halted 的 CPU 每步 tick(4)、在下一步边界才轮询,唤醒抖动 0–3 dot。这需要
+  **整体的 T-cycle 中断路径**(唤醒 + 派发 + 采样一起),不是点修——见 §3.6 的实验教训。
+- **`stat_lyc_onoff`**:已修**关屏时 LY=LYC 比较位冻结**(见 `fix(ppu): freeze LY==LYC`),
+  还差开屏那一拍精确触发 STAT 中断(要给写入路径加中断管线)。
+- **`lcdon_*`**:开屏首行 line 0 从 mode 0 直接进 mode 3(跳过 mode 2)、且 PPU 晚 2 T——
+  需要建首帧特殊时序,精确偏移待标定。
 
-### 3.4 `oam_dma/reg_read`、`oam_dma/sources-GS`
-DMA 寄存器回读值、以及从不同源地址区(含冲突区)启动 DMA 的细节;与 §3.1 的总线冲突
-模型相关。
+### 3.4 实验教训(已回退)
+几次朝 T-cycle 精度的尝试被棘轮挡回,记录以免重蹈:
+- **DMA 逐字节冲突读**:曾以为 DMA 期间读外部总线返回"在飞字节";实测**回归了
+  `oam_dma_start/restart/timing`**,证明 DMG 读到的是 `$FF` 开路总线,已回退。
+- **T-cycle HALT 唤醒**(逐 T 轮询):既没修好 intr_2,又**回归了一个 halt 时序测试**
+  (HALT 变成变长,破坏了别处的周期计数)。说明中断路径要整体改,不能只改唤醒。
+- **lcdon 首行建模**(mode 3 落在 dot 82):dot 偏移猜错,且改动破坏了本地 `ppu_test` 对
+  "开屏即 mode 2"的假设。首行特殊时序要连本地测试一起重做。
 
 ### 3.5 Boot 状态(不在目标范围)
 `boot_regs`/`boot_div`/`boot_hwio` 的 `dmg0/mgb/sgb/sgb2` 变体校验特定机型开机态;我们
@@ -166,7 +175,8 @@ Blargg cpu_instrs/instr/mem_timing  控制流读时序(call/ret/reti/jp)——�
 dmg-acid2                           rapid_toggle(总线写的 T 位置)
 mooneye: bits/instr/interrupts      PPU intr_2_mode* / lcdon / stat_lyc_onoff
 timer(除 rapid_toggle)             mealybug mode-3(取数/寄存器锁存点)
-oam_dma_start/restart/timing
+oam_dma 全组(start/restart/timing
+  /reg_read/sources)
 rst/push/call2 写时序
 ei_sequence;PPU mode-3 长度
 PPU hblank_ly_scx / vblank_stat_intr
