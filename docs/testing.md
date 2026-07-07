@@ -184,8 +184,25 @@ PPU hblank_ly_scx / vblank_stat_intr
 
 > **T-cycle 迁移状态**:CPU 时间推进已收敛到单一 T-cycle seam(`Cpu::tick_t`,见
 > `refactor(cpu): T-cycle tick primitive`)。实测 CPU 的访存本就落在 M-cycle 内正确的
-> 末拍(≈T4,故 Blargg `mem_timing` 过),所以 CPU 侧行为已 T-accurate;剩余精度缺口都在
-> **外设本地**(PPU 逐 dot、DMA 读采样)或 **timer 写的 T 相位**,而非 CPU 驱动本身。
+> 末拍(≈T4,故 Blargg `mem_timing` 过),所以 CPU 的**访存**已 T-accurate。
+
+### 3.6 已量化的根因:中断观测的相位量化(intr_2 一簇)
+用 `ppu_probe` 实测:PPU 的 mode2-int / mode3 / mode0 落点是教科书值 **dot 0 / 80 / 252**
+(= mode2→mode0 恰好 63 M-cycle),**PPU 侧没有偏移**。用一次性 trace 跑真 ROM 实测
+`intr_2_mode0_timing` 的 handler→mode0 跨度,两轮之间**抖动 4 T-cycle(整整 1 个 M-cycle)**,
+而真机是确定值——这就是失败原因。
+
+根因:**指令按 M-cycle 成块推进(每次 `tick(4)` 把 PPU 一次推 4 dot),而 PPU 是逐 dot 的**;
+halted 的 CPU 只在 M-cycle 边界轮询中断,于是"何时观测到 mode2-int"被量化到 ±1 M-cycle,
+两轮的相位不同→抖 4T。这解释了为什么:
+- `hblank_ly_scx` **过**——它是 SCX 之间的**相对**测量,常量相位差会抵消;
+- `intr_2_*` **挂**——它是**绝对**跨度,相位差不抵消。
+
+试过的 "T-cycle HALT 唤醒" 之所以回归 `hblank`:唤醒后 CPU 相位偏移,后续指令仍按 4-dot 成块
+推进,把相位不一致带进了 `hblank` 的相对测量。**结论:要修得让整颗 CPU 逐 T 步进(观测相位连续)**,
+且要连带重做 **timer 的 `just_reloaded` 守卫**(现依赖 M-cycle 原子 `tick(4)`)。这是一次**大而
+互相耦合的重写**(T-cycle 总线 + timer 守卫 + 中断/HALT 路径),无法拆成可逐步验证的原子改动,
+故列为专项工作,起点是已就位的 `tick_t` seam。
 
 ---
 
