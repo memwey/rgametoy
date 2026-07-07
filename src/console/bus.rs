@@ -27,6 +27,9 @@ pub struct MemoryBus {
     timer: Timer,
     apu: Apu,
     serial: Serial,
+    /// T-cycles remaining in an active OAM DMA transfer (0 = idle). While it
+    /// runs the CPU can only reach HRAM.
+    dma_remaining: u16,
     if_register: u8, // Interrupt Flag register (0xFF0F)
     ie_register: u8, // Interrupt Enable register (0xFFFF)
 }
@@ -42,6 +45,7 @@ impl MemoryBus {
             timer: Timer::new(),
             apu: Apu::new(),
             serial: Serial::new(),
+            dma_remaining: 0,
             if_register: 0x00,
             ie_register: 0x00,
         }
@@ -59,6 +63,7 @@ impl MemoryBus {
         self.apu.tick(cycles);
         let ppu_interrupts = self.ppu.tick(cycles);
         self.if_register |= ppu_interrupts & 0x1F;
+        self.dma_remaining = self.dma_remaining.saturating_sub(cycles as u16);
     }
 
     /// Bytes the program has shifted out over the serial port (test-ROM output).
@@ -108,13 +113,18 @@ impl MemoryBus {
         self.if_register |= interrupt_type.to_bit();
     }
 
-    /// Copy 160 bytes from `value << 8` into OAM (OAM DMA transfer).
+    /// Start an OAM DMA transfer: copy 160 bytes from `value << 8` into OAM and
+    /// arm the 640-T-cycle busy window (during which only HRAM is accessible).
+    /// The copy is done up front (the OAM contents are correct immediately);
+    /// the window models the bus being unavailable to the CPU meanwhile.
     fn oam_dma(&mut self, value: u8) {
+        self.dma_remaining = 0; // the source copy itself must not be blocked
         let source = (value as u16) << 8;
         for i in 0..0xA0u16 {
             let byte = self.read_byte(source + i);
             self.ppu.dma_write_oam(i as usize, byte);
         }
+        self.dma_remaining = 160 * 4; // 160 M-cycles
     }
 }
 
@@ -126,6 +136,12 @@ impl Default for MemoryBus {
 
 impl Bus for MemoryBus {
     fn read_byte(&self, addr: u16) -> u8 {
+        // While OAM DMA is running the CPU can only reach HRAM. The interrupt
+        // registers (IF/IE) are not on the blocked bus, and the CPU polls them
+        // every step, so they stay accessible.
+        if self.dma_remaining > 0 && addr < 0xFF80 && addr != 0xFF0F {
+            return 0xFF;
+        }
         match addr {
             0x0000..=0x7FFF => self.cartridge.read_rom(addr),
             0x8000..=0x9FFF => self.ppu.read_vram(addr),
