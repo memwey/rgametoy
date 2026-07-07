@@ -92,6 +92,7 @@ pub struct Ppu {
     sprite_fetched: [bool; 10],
     sprite_delay: u8,       // dots left in an in-progress sprite fetch
     sprite_index: usize,    // line_sprites slot being fetched
+    warmup: u8,             // fetcher startup stall at the start of mode 3
 }
 
 impl Ppu {
@@ -134,6 +135,7 @@ impl Ppu {
             sprite_fetched: [false; 10],
             sprite_delay: 0,
             sprite_index: 0,
+            warmup: 0,
         }
     }
 
@@ -248,6 +250,10 @@ impl Ppu {
         self.discard = self.scx & 7;
         self.window_active = false;
         self.sprite_delay = 0;
+        // The BG fetcher needs a fixed startup before the first pixel can be
+        // pushed, so mode 3 is 172 dots at SCX 0 (not the 167 the bare FIFO
+        // warmup yields). Model the missing dots as an explicit stall.
+        self.warmup = 5;
     }
 
     /// Select up to 10 sprites overlapping this line, in OAM order.
@@ -270,6 +276,12 @@ impl Ppu {
     /// One dot of mode 3: advance the fetcher, then discard / start the window
     /// / fetch a sprite / output a pixel as appropriate.
     fn draw_dot(&mut self) {
+        // Fixed fetcher startup: mode 3 stalls before any pixel work.
+        if self.warmup > 0 {
+            self.warmup -= 1;
+            return;
+        }
+
         // A sprite fetch pauses the background pipeline.
         if self.sprite_delay > 0 {
             self.sprite_delay -= 1;
