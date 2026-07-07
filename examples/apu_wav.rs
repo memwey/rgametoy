@@ -3,17 +3,16 @@
 //!
 //! Run with: `cargo run --example apu_wav -- out.wav`
 
-use rgametoy::apu::Apu;
+use rgametoy::apu::{Apu, OUTPUT_RATE};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
-const SAMPLE_RATE: u32 = 48000;
+const SAMPLE_RATE: u32 = OUTPUT_RATE;
 
 fn main() {
     let path = std::env::args().nth(1).unwrap_or_else(|| "out.wav".to_string());
 
     let mut apu = Apu::new();
-    apu.set_sample_rate(SAMPLE_RATE);
     apu.write_register(0xFF26, 0x80); // power on
     apu.write_register(0xFF24, 0x77); // NR50: max volume
     apu.write_register(0xFF25, 0xFF); // NR51: both sides

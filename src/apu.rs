@@ -11,6 +11,12 @@
 //! optional `audio` feature (see `audio.rs`).
 
 const CPU_HZ: f64 = 4_194_304.0;
+
+/// Fixed, device-independent rate (Hz) at which the APU emits samples. The
+/// frontend resamples this stream to the actual audio device's rate — the core
+/// itself knows nothing about the output device.
+pub const OUTPUT_RATE: u32 = 48000;
+
 /// T-cycles per 512 Hz frame-sequencer step.
 const FRAME_SEQ_PERIOD: u32 = 8192;
 /// Cap on buffered interleaved samples, so the buffer stays bounded even if no
@@ -434,7 +440,7 @@ pub struct Apu {
 
 impl Apu {
     pub fn new() -> Apu {
-        let mut apu = Apu {
+        Apu {
             ch1: SquareChannel::new(true),
             ch2: SquareChannel::new(false),
             ch3: WaveChannel::new(),
@@ -445,30 +451,23 @@ impl Apu {
             frame_seq_counter: 0,
             frame_seq_step: 0,
             sample_clock: 0.0,
-            cycles_per_sample: 1.0,
-            hp_factor: 0.0,
+            // T-cycles between emitted samples, and the DMG high-pass capacitor
+            // factor, both fixed to the core's device-independent OUTPUT_RATE.
+            cycles_per_sample: CPU_HZ / OUTPUT_RATE as f64,
+            hp_factor: 0.999958_f32.powf(CPU_HZ as f32 / OUTPUT_RATE as f32),
             hp_cap_l: 0.0,
             hp_cap_r: 0.0,
             buffer: Vec::new(),
-        };
-        apu.set_sample_rate(48000);
-        apu
+        }
     }
 
-    /// Set the output sample rate (Hz) and recompute resampling / high-pass.
-    pub fn set_sample_rate(&mut self, rate: u32) {
-        self.cycles_per_sample = CPU_HZ / rate as f64;
-        // DMG high-pass capacitor, adjusted for the chosen sample rate.
-        self.hp_factor = 0.999958_f32.powf(CPU_HZ as f32 / rate as f32);
-        self.sample_clock = 0.0;
-        self.buffer.clear();
+    /// The (fixed) rate at which [`Apu::take_samples`] produces samples.
+    pub fn output_rate(&self) -> u32 {
+        OUTPUT_RATE
     }
 
-    pub fn sample_rate_buffer_len(&self) -> usize {
-        self.buffer.len()
-    }
-
-    /// Remove and return all buffered interleaved (L, R, L, R, …) samples.
+    /// Remove and return all buffered interleaved (L, R, L, R, …) samples,
+    /// at [`OUTPUT_RATE`]. The frontend resamples these to its device rate.
     pub fn take_samples(&mut self) -> Vec<f32> {
         std::mem::take(&mut self.buffer)
     }

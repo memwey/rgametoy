@@ -38,12 +38,12 @@ impl Emulator {
 
         #[cfg(feature = "audio")]
         let audio = {
-            let player = crate::audio::AudioPlayer::new();
+            // The core APU emits at its own fixed rate; the player resamples to
+            // the device. The core is never told the device rate.
+            let source_rate = console.get_apu().borrow().output_rate();
+            let player = crate::audio::AudioPlayer::new(source_rate);
             match &player {
-                Some(p) => {
-                    console.get_apu().borrow_mut().set_sample_rate(p.sample_rate());
-                    println!("audio: output at {} Hz", p.sample_rate());
-                }
+                Some(p) => println!("audio: output at {} Hz", p.sample_rate()),
                 None => eprintln!("audio: no output device found, running muted"),
             }
             player
@@ -106,17 +106,20 @@ impl Emulator {
                 self.display.present(&framebuffer);
             }
 
-            // Drain the APU each frame to keep its buffer bounded; while
-            // fast-forwarding we simply drop the (over-produced) samples.
+            // Drain the APU each frame to keep its buffer bounded. Only feed
+            // the device at normal speed: off-speed produces the wrong number
+            // of samples per real second, so we mute (drop) instead — which
+            // keeps the resampler a fixed source→device ratio.
             let samples = self.console.get_apu().borrow_mut().take_samples();
+            let normal_speed = speed == 1.0;
             #[cfg(feature = "audio")]
-            if !input.turbo {
-                if let Some(player) = &self.audio {
+            if normal_speed {
+                if let Some(player) = &mut self.audio {
                     player.queue(&samples);
                 }
             }
             #[cfg(not(feature = "audio"))]
-            let _ = samples;
+            let _ = (samples, normal_speed);
 
             frames_since_save += 1;
             if frames_since_save >= AUTOSAVE_INTERVAL_FRAMES {
