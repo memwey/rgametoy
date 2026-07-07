@@ -26,12 +26,13 @@ PPU 扫描线渲染(背景 / 窗口 / 精灵)、OAM DMA、串口(截获输出)�
 是纯 Rust、默认编译;真实音频输出通过 `audio` feature(cpal)开启,默认关闭。
 
 另外支持**快进/加速**(按住 Tab,倍率可配)和**即时存档 / 读档 (save state)**
-(F5/F7,整机深拷贝到内存槽,零依赖)。尚未实现:亚扫描线级 (FIFO) 时序精度、MBC3 RTC。
+(F5/F7,整机深拷贝到内存槽,零依赖)。尚未实现:像素级 (FIFO) PPU 时序、MBC3 RTC、MBC2。
 
 ### 测试 ROM 验证
 
-CPU 通过 Blargg 标准测试 ROM(经串口输出结果):`cpu_instrs`(全部 11 项)、
-`instr_timing` 均 **Passed**;PPU 通过 **dmg-acid2**(渲染出完整参考笑脸)。
+CPU 是**逐 M-cycle 精确**的(每次访存/内部周期都推进外设)。通过 Blargg 标准测试
+ROM(经串口输出结果):`cpu_instrs`(全部 11 项)、`instr_timing`、`mem_timing` 均
+**Passed**;PPU 通过 **dmg-acid2**(渲染出完整参考笑脸)。
 
 ```sh
 cargo run --release --example run_serial -- path/to/test.gb   # 打印串口输出(Blargg)
