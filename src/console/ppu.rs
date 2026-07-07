@@ -220,6 +220,9 @@ impl Ppu {
         (self.mode == PpuMode::HBlank && self.stat & 0x08 != 0)
             || (self.mode == PpuMode::VBlank && self.stat & 0x10 != 0)
             || (self.mode == PpuMode::OamScan && self.stat & 0x20 != 0)
+            // The mode-2 (OAM) source is also asserted at the start of VBlank
+            // (line 144), so a STAT interrupt fires together with VBlank.
+            || (self.ly == SCREEN_HEIGHT as u8 && self.stat & 0x20 != 0)
             || (self.ly == self.lyc && self.stat & 0x40 != 0)
     }
 
