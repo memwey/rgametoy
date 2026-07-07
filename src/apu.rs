@@ -32,10 +32,29 @@ const DUTY: [[u8; 8]; 4] = [
 
 const NOISE_DIVISORS: [u32; 8] = [8, 16, 32, 48, 64, 80, 96, 112];
 
-/// Convert a 4-bit digital channel value (0-15) to an analog sample in
-/// [-1, 1]. A powered-off DAC contributes silence and is handled by the caller.
-fn dac(digital: u8) -> f32 {
-    1.0 - digital as f32 / 7.5
+/// A per-channel digital-to-analog converter, mirroring the four independent
+/// DACs in the DMG sound hardware. It converts a channel's 4-bit digital value
+/// (0-15) into an analog sample in [-1, 1].
+///
+/// The DAC enable is separate from the channel's on/off state: a disabled DAC
+/// contributes silence, while an *enabled* DAC fed a 0 value (e.g. a channel
+/// switched off) sits at +1.0 — a DC level the output high-pass then removes.
+struct Dac {
+    enabled: bool,
+}
+
+impl Dac {
+    fn new() -> Dac {
+        Dac { enabled: false }
+    }
+
+    fn output(&self, digital: u8) -> f32 {
+        if self.enabled {
+            1.0 - digital as f32 / 7.5
+        } else {
+            0.0
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -96,7 +115,7 @@ impl Envelope {
 
 struct SquareChannel {
     enabled: bool,
-    dac_enabled: bool,
+    dac: Dac,
     duty: u8,
     duty_pos: u8,
     frequency: u16,
@@ -118,7 +137,7 @@ impl SquareChannel {
     fn new(has_sweep: bool) -> SquareChannel {
         SquareChannel {
             enabled: false,
-            dac_enabled: false,
+            dac: Dac::new(),
             duty: 0,
             duty_pos: 0,
             frequency: 0,
@@ -210,21 +229,18 @@ impl SquareChannel {
                 self.sweep_calc();
             }
         }
-        if !self.dac_enabled {
+        if !self.dac.enabled {
             self.enabled = false;
         }
     }
 
     fn dac_output(&self) -> f32 {
-        if !self.dac_enabled {
-            return 0.0;
-        }
         let digital = if self.enabled && DUTY[self.duty as usize][self.duty_pos as usize] == 1 {
             self.env.volume
         } else {
             0
         };
-        dac(digital)
+        self.dac.output(digital)
     }
 }
 
@@ -234,7 +250,7 @@ impl SquareChannel {
 
 struct WaveChannel {
     enabled: bool,
-    dac_enabled: bool,
+    dac: Dac,
     frequency: u16,
     freq_timer: u16,
     position: u8,
@@ -249,7 +265,7 @@ impl WaveChannel {
     fn new() -> WaveChannel {
         WaveChannel {
             enabled: false,
-            dac_enabled: false,
+            dac: Dac::new(),
             frequency: 0,
             freq_timer: 4096,
             position: 0,
@@ -295,15 +311,12 @@ impl WaveChannel {
         }
         self.freq_timer = self.period();
         self.position = 0;
-        if !self.dac_enabled {
+        if !self.dac.enabled {
             self.enabled = false;
         }
     }
 
     fn dac_output(&self) -> f32 {
-        if !self.dac_enabled {
-            return 0.0;
-        }
         let digital = if self.enabled {
             let shift = match self.volume_code {
                 1 => 0,
@@ -315,7 +328,7 @@ impl WaveChannel {
         } else {
             0
         };
-        dac(digital)
+        self.dac.output(digital)
     }
 }
 
@@ -325,7 +338,7 @@ impl WaveChannel {
 
 struct NoiseChannel {
     enabled: bool,
-    dac_enabled: bool,
+    dac: Dac,
     lfsr: u16,
     clock_shift: u8,
     width_7bit: bool,
@@ -340,7 +353,7 @@ impl NoiseChannel {
     fn new() -> NoiseChannel {
         NoiseChannel {
             enabled: false,
-            dac_enabled: false,
+            dac: Dac::new(),
             lfsr: 0x7FFF,
             clock_shift: 0,
             width_7bit: false,
@@ -395,21 +408,18 @@ impl NoiseChannel {
         self.freq_timer = self.period();
         self.lfsr = 0x7FFF;
         self.env.trigger();
-        if !self.dac_enabled {
+        if !self.dac.enabled {
             self.enabled = false;
         }
     }
 
     fn dac_output(&self) -> f32 {
-        if !self.dac_enabled {
-            return 0.0;
-        }
         let digital = if self.enabled && (self.lfsr & 1) == 0 {
             self.env.volume
         } else {
             0
         };
-        dac(digital)
+        self.dac.output(digital)
     }
 }
 
@@ -572,7 +582,7 @@ impl Apu {
             0xFF18 => 0xFF,
             0xFF19 => ((self.ch2.length_enabled as u8) << 6) | 0xBF,
 
-            0xFF1A => ((self.ch3.dac_enabled as u8) << 7) | 0x7F,
+            0xFF1A => ((self.ch3.dac.enabled as u8) << 7) | 0x7F,
             0xFF1B => 0xFF,
             0xFF1C => (self.ch3.volume_code << 5) | 0x9F,
             0xFF1D => 0xFF,
@@ -620,8 +630,8 @@ impl Apu {
             }
             0xFF12 => {
                 self.ch1.env.write_nrx2(value);
-                self.ch1.dac_enabled = self.ch1.env.dac_enabled();
-                if !self.ch1.dac_enabled {
+                self.ch1.dac.enabled = self.ch1.env.dac_enabled();
+                if !self.ch1.dac.enabled {
                     self.ch1.enabled = false;
                 }
             }
@@ -640,8 +650,8 @@ impl Apu {
             }
             0xFF17 => {
                 self.ch2.env.write_nrx2(value);
-                self.ch2.dac_enabled = self.ch2.env.dac_enabled();
-                if !self.ch2.dac_enabled {
+                self.ch2.dac.enabled = self.ch2.env.dac_enabled();
+                if !self.ch2.dac.enabled {
                     self.ch2.enabled = false;
                 }
             }
@@ -655,8 +665,8 @@ impl Apu {
             }
 
             0xFF1A => {
-                self.ch3.dac_enabled = value & 0x80 != 0;
-                if !self.ch3.dac_enabled {
+                self.ch3.dac.enabled = value & 0x80 != 0;
+                if !self.ch3.dac.enabled {
                     self.ch3.enabled = false;
                 }
             }
@@ -674,8 +684,8 @@ impl Apu {
             0xFF20 => self.ch4.length_counter = 64 - (value & 0x3F) as u16,
             0xFF21 => {
                 self.ch4.env.write_nrx2(value);
-                self.ch4.dac_enabled = self.ch4.env.dac_enabled();
-                if !self.ch4.dac_enabled {
+                self.ch4.dac.enabled = self.ch4.env.dac_enabled();
+                if !self.ch4.dac.enabled {
                     self.ch4.enabled = false;
                 }
             }
