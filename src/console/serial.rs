@@ -6,6 +6,7 @@
 /// per bit).
 const TRANSFER_CYCLES: u16 = 512 * 8;
 
+#[derive(Clone)]
 pub struct Serial {
     data: u8,    // SB (0xFF01)
     control: u8, // SC (0xFF02)

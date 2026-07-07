@@ -1,5 +1,6 @@
 const HRAM_SIZE: usize = 0x007F; // 127 bytes
 
+#[derive(Clone)]
 pub struct Hram {
     data: [u8; HRAM_SIZE],
 }

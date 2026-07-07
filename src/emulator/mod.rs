@@ -4,7 +4,7 @@ pub mod input;
 pub mod audio;
 
 use crate::console::cartridge::Cartridge;
-use crate::console::Console;
+use crate::console::{Console, SaveState};
 use crate::emulator::display::Display;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -31,6 +31,10 @@ pub struct Emulator {
     prev_buttons: u8,
     /// Speed multiplier applied while the fast-forward key is held.
     turbo_speed: f64,
+    /// Instant save-state slot, plus previous key states for edge detection.
+    quick_state: Option<SaveState>,
+    prev_save: bool,
+    prev_load: bool,
     /// `<rom>.sav` path, set only for battery-backed cartridges.
     save_path: Option<PathBuf>,
     #[cfg(feature = "audio")]
@@ -59,6 +63,9 @@ impl Emulator {
             display: Display::new(),
             prev_buttons: 0xFF,
             turbo_speed: DEFAULT_TURBO_SPEED,
+            quick_state: None,
+            prev_save: false,
+            prev_load: false,
             save_path: None,
             #[cfg(feature = "audio")]
             audio,
@@ -101,6 +108,7 @@ impl Emulator {
 
             let input = crate::emulator::input::poll(&self.display);
             self.apply_input(&input);
+            self.handle_save_state(&input);
             let speed = if input.turbo { self.turbo_speed } else { 1.0 };
 
             // Emulate one frame in the core, then present it — presentation is a
@@ -165,6 +173,23 @@ impl Emulator {
             Ok(()) => bus.cartridge_mut().clear_ram_dirty(),
             Err(e) => eprintln!("failed to write save {}: {e}", path.display()),
         }
+    }
+
+    /// Handle the instant save/load hotkeys (edge-triggered: one press acts
+    /// once). F5 captures a snapshot, F7 restores it.
+    fn handle_save_state(&mut self, input: &crate::emulator::input::InputState) {
+        if input.save && !self.prev_save {
+            self.quick_state = Some(self.console.save_state());
+            println!("save state stored");
+        }
+        if input.load && !self.prev_load {
+            if let Some(state) = &self.quick_state {
+                self.console.load_state(state);
+                println!("save state loaded");
+            }
+        }
+        self.prev_save = input.save;
+        self.prev_load = input.load;
     }
 
     fn apply_input(&mut self, input: &crate::emulator::input::InputState) {

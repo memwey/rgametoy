@@ -12,6 +12,7 @@ enum MbcKind {
     Mbc5,
 }
 
+#[derive(Clone)]
 pub struct Cartridge {
     rom: Vec<u8>,
     ram: Vec<u8>,

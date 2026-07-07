@@ -1,3 +1,4 @@
+#[derive(Clone)]
 pub struct Timer {
     div: u16, // Divider Register (0xFF04)
     tima: u8, // Timer Counter (0xFF05)

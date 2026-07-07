@@ -21,11 +21,18 @@ const CYCLES_PER_FRAME: u64 = 70224;
 
 /// The emulated Game Boy: the CPU plus the system bus that owns every
 /// memory-mapped peripheral.
+#[derive(Clone)]
 pub struct Console {
     cpu: Cpu,
     bus: MemoryBus,
     total_cycles: u64,
 }
+
+/// A full snapshot of the machine, for instant save/load. It is a deep copy of
+/// the [`Console`] (including cartridge RAM but also the ROM), so it is
+/// self-contained.
+#[derive(Clone)]
+pub struct SaveState(Console);
 
 impl Console {
     pub fn new() -> Console {
@@ -117,6 +124,16 @@ impl Console {
     /// Bytes the program has printed over the serial port (test-ROM output).
     pub fn take_serial_output(&mut self) -> Vec<u8> {
         self.bus.take_serial_output()
+    }
+
+    /// Capture a full snapshot of the machine (instant save state).
+    pub fn save_state(&self) -> SaveState {
+        SaveState(self.clone())
+    }
+
+    /// Restore a previously captured snapshot (instant load state).
+    pub fn load_state(&mut self, state: &SaveState) {
+        self.clone_from(&state.0);
     }
 
     /// Update the joypad button state (0 = pressed) and raise a Joypad

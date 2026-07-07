@@ -1,6 +1,7 @@
 
 
 
+#[derive(Clone)]
 pub struct Registers {
     // Accumulator and Flags
     pub af: u16,

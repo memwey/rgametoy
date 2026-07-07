@@ -32,6 +32,9 @@ const KEY_MAP: &[(Key, u8)] = &[
 
 /// Host key that holds fast-forward.
 const TURBO_KEY: Key = Key::Tab;
+/// Host keys for the instant save / load save-state slot.
+const SAVE_KEY: Key = Key::F5;
+const LOAD_KEY: Key = Key::F7;
 
 /// A frame's worth of host input, decoded into console-facing values.
 pub struct InputState {
@@ -39,6 +42,10 @@ pub struct InputState {
     pub buttons: u8,
     /// Whether fast-forward is held this frame.
     pub turbo: bool,
+    /// Whether the save-state / load-state keys are down this frame (the
+    /// emulator edge-detects them so one press acts once).
+    pub save: bool,
+    pub load: bool,
 }
 
 /// Read the current host keyboard and map it to console input.
@@ -52,5 +59,7 @@ pub fn poll(display: &Display) -> InputState {
     InputState {
         buttons,
         turbo: display.is_key_down(TURBO_KEY),
+        save: display.is_key_down(SAVE_KEY),
+        load: display.is_key_down(LOAD_KEY),
     }
 }

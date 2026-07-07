@@ -1,5 +1,6 @@
 const WRAM_SIZE: usize = 0x2000; // 8KB
 
+#[derive(Clone)]
 pub struct Wram {
     data: [u8; WRAM_SIZE],
 }

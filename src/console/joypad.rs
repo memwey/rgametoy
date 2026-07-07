@@ -1,4 +1,5 @@
 // P1 Register is at 0xFF00, and is used to read the state of the buttons
+#[derive(Clone)]
 pub struct P1 {
     // State of the buttons
     // Bit 0 - Right

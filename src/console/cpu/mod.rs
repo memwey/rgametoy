@@ -20,6 +20,7 @@ pub use self::registers::Registers;
 ///
 /// The opcode decode lives in the sibling `execute` (base), `cb`
 /// (`0xCB`-prefixed) and `alu` submodules.
+#[derive(Clone)]
 pub struct Cpu {
     registers: Registers,
     /// Interrupt Master Enable.

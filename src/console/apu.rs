@@ -39,6 +39,7 @@ const NOISE_DIVISORS: [u32; 8] = [8, 16, 32, 48, 64, 80, 96, 112];
 /// The DAC enable is separate from the channel's on/off state: a disabled DAC
 /// contributes silence, while an *enabled* DAC fed a 0 value (e.g. a channel
 /// switched off) sits at +1.0 — a DC level the output high-pass then removes.
+#[derive(Clone)]
 struct Dac {
     enabled: bool,
 }
@@ -61,7 +62,7 @@ impl Dac {
 // Volume envelope (shared by the square and noise channels)
 // ---------------------------------------------------------------------------
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Envelope {
     start_volume: u8,
     add_mode: bool,
@@ -113,6 +114,7 @@ impl Envelope {
 // Square channel (channels 1 and 2; channel 1 also has a sweep unit)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 struct SquareChannel {
     enabled: bool,
     dac: Dac,
@@ -248,6 +250,7 @@ impl SquareChannel {
 // Wave channel (channel 3)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 struct WaveChannel {
     enabled: bool,
     dac: Dac,
@@ -336,6 +339,7 @@ impl WaveChannel {
 // Noise channel (channel 4)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 struct NoiseChannel {
     enabled: bool,
     dac: Dac,
@@ -427,6 +431,7 @@ impl NoiseChannel {
 // APU
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct Apu {
     ch1: SquareChannel,
     ch2: SquareChannel,

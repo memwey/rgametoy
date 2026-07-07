@@ -28,6 +28,7 @@ pub enum PpuMode {
     Drawing = 3,
 }
 
+#[derive(Clone)]
 pub struct Ppu {
     vram: [u8; VRAM_SIZE],
     oam: [u8; OAM_SIZE],

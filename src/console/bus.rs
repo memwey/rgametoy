@@ -18,6 +18,7 @@ pub trait Bus {
 /// accesses to them by address, mirroring the DMG memory map. The CPU (and the
 /// OAM DMA) are the only bus masters; peripherals are slaves reached through
 /// here.
+#[derive(Clone)]
 pub struct MemoryBus {
     cartridge: Cartridge,
     wram: Wram,
