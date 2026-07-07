@@ -74,7 +74,7 @@ cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲�
 
 渲染出完整参考笑脸(FIFO 重写前后字节一致,佐证渲染正确)。
 
-### 2.3 mooneye acceptance —— 41 / 75
+### 2.3 mooneye acceptance —— 44 / 75
 
 | 分组 | 成绩 | 备注 |
 |---|---|---|
@@ -83,7 +83,7 @@ cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲�
 | interrupts | 1/1 ✅ | `ie_push` 已修(压栈盖 IE 重算向量) |
 | timer | 12/13 | 仅剩 `rapid_toggle` |
 | oam_dma | 1/3 | 挂 `reg_read`、`sources-GS` |
-| ppu | 2/12 | 挂全部 `intr_2_mode*`、`stat_lyc_onoff`、`lcdon_*` 等 |
+| ppu | 5/12 | 已修 `hblank_ly_scx`、`intr_2_0`、`vblank_stat_intr`;挂 `intr_2_mode0/mode3/oam_ok`、`lcdon_*`、`stat_lyc_onoff` |
 | serial | 0/1 | `boot_sclk_align`(需 boot 时序) |
 | root | 21/41 | 拆解见下 |
 
@@ -115,40 +115,39 @@ root 组 20 个失败按性质分两类:
 **T-cycle / 逐点精确**落点的,还没到位。这些不是"改几行"能干净修的,普遍**标定密集、
 有回归风险**,故单独列出。
 
-### 3.1 逐字节 OAM DMA 总线冲突读(阻挡 `call/ret/reti/jp` 等 timing)
+### 3.1 控制流读时序(`call/ret/reti/jp/add_sp_e/ld_hl_sp_e`)
 mooneye 这些 timing 测试用 **OAM DMA 当示波器**:把栈指进 OAM、或让操作数从外部总线
 读取,再用 DMA 窗口卡边界。**写**方向已经修好(见
 [`fix(bus): cycle-accurate OAM DMA start delay and bus blocking`](../src/console/bus.rs)):
 启动延迟 = 1 个空转 M-cycle(M=1 仍可访问 OAM、M=2 才 block),窗口内对外部总线/OAM
 的写被丢弃——`rst/push/call2/call_cc2` 因此转绿。
 
-**读**方向没到位。真机在 DMA 期间从外部总线读到的是"**DMA 当前正在搬运的那个字节**",
-而我们是**一次性原子拷贝**、阻挡读一律返回 `$FF`,没有"当前在飞字节"的概念。dump 寄存器
-可见这几个测试不是"边界差一拍",而是喂错数据后**整个跑飞**(`jp_timing` 与 `call_timing`
-结束态完全一致地卡死)。要修得建**逐字节、按 T-cycle 推进的 DMA 总线模型**,且哪个字节、
-差几拍都要拿 ROM 反复标定——已滑出"小而可控"范围。
-(`oam_dma_timing` 能过,只是因为它的源恰好是 `$FF`。)
+**读**方向仍没到位,但原因和先前的猜测**相反**:曾假设 DMA 期间读外部总线应返回"DMA
+当前在搬运的字节"。实测把它建成**逐字节冲突读**后,`oam_dma_start/restart/timing` 立刻
+回归——**证明 DMG 在 DMA 期间读到的就是 `$FF`(开路总线),不是源字节**,该改动已回退。
+所以这簇失败是更细的**读边界/采样拍**问题(dump 寄存器可见整个跑飞),暂未定位到可干净修
+的根因。
 
 ### 3.2 `rapid_toggle`(timer 亚周期)
 timer 内部本就逐 T-cycle。差的是 **CPU 的写在 M-cycle 内哪一拍提交**:紧凑循环里连写
 TAC,毛刺增量取决于写落地那刻计数器选中位是 0 还是 1;压在位翻转边界上,差 1–2 个
 T-cycle 结果就差一次。杠杆在"总线写的精确 T 位置",不在 timer 本身。
 
-### 3.3 PPU 组(mooneye `ppu` 10 挂 + mealybug mode-3)
-先说清楚:STAT 中断的**边沿检测(电平触发、上升沿才请求)已实现且正确**
-(`ppu.rs` 的 `update_stat_line`),所以这一组不是"STAT 逻辑没写"的问题。剩下的分两拨:
+### 3.3 PPU 组(mooneye `ppu` 7 挂 + mealybug mode-3)
+STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。本轮又修好三个:
 
-- **逐点(dot-precise)时序,难,属 T-cycle 前沿(约 8 个)**:`intr_2_mode0_timing`、
-  `intr_2_mode3_timing`、`intr_2_0_timing`、`intr_2_oam_ok_timing`、
-  `intr_2_mode0_timing_sprites`、`hblank_ly_scx_timing`、`lcdon_timing`、
-  `lcdon_write_timing`。测的是**模式在哪个 dot 翻转、STAT 在哪个 dot 触发**。我们的
-  mode 3 长度是 FIFO 里**涌现**出来的,还没标定到逐 dot 精确;`lcdon_*` 还要模拟开屏
-  首行的特殊时序。
-- **可能可控、但需改写入路径的逻辑怪癖(约 2 个)**:`stat_lyc_onoff`(写 STAT/LYC
-  要**当场重算** STAT 线,可能产生上升沿→中断)、`vblank_stat_intr`(进入 VBlank 的第
-  144 行会**顺带触发 mode 2/OAM 的 STAT 中断**)。这俩看着像纯逻辑,但 `write_register`
-  目前不回传中断,得给写入路径加管线(pending 标志或返回值),而且仍带 dot 敏感性和
-  **dmg-acid2 回归风险**——不像 EI 那样"改几行就干净",归为待评估。
+- **`hblank_ly_scx_timing` + `intr_2_0_timing`**:此前 mode 3 长度只有 167 dot(裸 FIFO
+  warmup),真机是 172。补上**固定 5-dot 取数启动 stall**后,mode 3 = 172 + (SCX&7) +
+  精灵/窗口惩罚,HBlank 起点归位。像素不变(acid2 字节稳定),只是产出的 dot 时刻对齐。
+- **`vblank_stat_intr`**:第 144 行进 VBlank 时同时触发 mode 2/OAM 的 STAT 中断——把
+  144 行并入 STAT 线条件即可。
+
+仍挂 7 个,都是**逐点(dot-precise)时序**:`intr_2_mode0/mode3/oam_ok_timing`、
+`intr_2_mode0_timing_sprites`、`lcdon_timing`、`lcdon_write_timing`、`stat_lyc_onoff`。
+其中 intr_2 一簇测"从 mode2 中断到 modeX 的精确 M-cycle 数"——我们的 mode2-int/mode3/
+mode0 落点已是教科书值(dot 0 / 80 / 252),差的是更细的采样拍偏移,缺权威参考数难标定;
+`lcdon_*` 要模拟开屏首帧特殊时序;`stat_lyc_onoff` 要模拟**关屏时 LY=LYC 比较位冻结**、
+开屏重启比较的行为。
 
 ### 3.4 `oam_dma/reg_read`、`oam_dma/sources-GS`
 DMA 寄存器回读值、以及从不同源地址区(含冲突区)启动 DMA 的细节;与 §3.1 的总线冲突
@@ -163,14 +162,20 @@ DMA 寄存器回读值、以及从不同源地址区(含冲突区)启动 DMA 的
 ```
 M-cycle 级(已过 / 可干净修)        亚 M-cycle / T-cycle 级(标定密集、有回归风险)
 ──────────────────────────────────┼────────────────────────────────────────────
-Blargg cpu_instrs/instr/mem_timing  逐字节 DMA 总线冲突读(call/ret/reti/jp)
+Blargg cpu_instrs/instr/mem_timing  控制流读时序(call/ret/reti/jp)——读边界/采样拍
 dmg-acid2                           rapid_toggle(总线写的 T 位置)
-mooneye: bits/instr/interrupts      PPU intr_2_mode* / hblank / lcdon
+mooneye: bits/instr/interrupts      PPU intr_2_mode* / lcdon / stat_lyc_onoff
 timer(除 rapid_toggle)             mealybug mode-3(取数/寄存器锁存点)
-oam_dma_start/restart/timing        ──待评估:PPU stat_lyc_onoff /
-rst/push/call2 等写时序               vblank_stat_intr(逻辑怪癖,需改写入路径)
-ei_sequence(EI 一指令延迟)
+oam_dma_start/restart/timing
+rst/push/call2 写时序
+ei_sequence;PPU mode-3 长度
+PPU hblank_ly_scx / vblank_stat_intr
 ```
+
+> **T-cycle 迁移状态**:CPU 时间推进已收敛到单一 T-cycle seam(`Cpu::tick_t`,见
+> `refactor(cpu): T-cycle tick primitive`)。实测 CPU 的访存本就落在 M-cycle 内正确的
+> 末拍(≈T4,故 Blargg `mem_timing` 过),所以 CPU 侧行为已 T-accurate;剩余精度缺口都在
+> **外设本地**(PPU 逐 dot、DMA 读采样)或 **timer 写的 T 相位**,而非 CPU 驱动本身。
 
 ---
 
