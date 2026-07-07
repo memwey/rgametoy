@@ -185,10 +185,18 @@ impl Cpu {
 
     // --- Timing primitives: every access / internal delay ticks the system ---
 
-    /// Advance the rest of the machine by one M-cycle.
+    /// Advance the rest of the machine by `n` T-cycles. This is the single seam
+    /// through which the CPU (the bus master) drives time: all access and
+    /// internal-delay timing is expressed in T-cycles here, so peripherals can
+    /// later be observed at sub-M-cycle positions without touching the decode.
+    fn tick_t(&mut self, bus: &mut impl Bus, n: u8) {
+        bus.tick(n);
+        self.cycles = self.cycles.wrapping_add(n);
+    }
+
+    /// Advance the rest of the machine by one M-cycle (4 T-cycles).
     fn tick(&mut self, bus: &mut impl Bus) {
-        bus.tick(4);
-        self.cycles = self.cycles.wrapping_add(4);
+        self.tick_t(bus, 4);
     }
 
     fn read(&mut self, bus: &mut impl Bus, addr: u16) -> u8 {
