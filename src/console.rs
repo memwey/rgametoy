@@ -2,12 +2,11 @@ use crate::apu::Apu;
 use crate::bus::{Bus, MemoryBus};
 use crate::cartridge::Cartridge;
 use crate::cpu::Cpu;
-use crate::display::Display;
 use crate::interrupts::InterruptType;
 use crate::p1::P1;
 use crate::ppu::Ppu;
 use crate::timer::Timer;
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::rc::Rc;
 
 // The Game Boy runs at 4.194304 MHz. One frame is 154 scanlines × 456 dots =
@@ -98,7 +97,10 @@ impl Console {
         cycles
     }
 
-    pub fn run_frame(&mut self, display: &mut Display) {
+    /// Advance the machine until the PPU completes one frame (or a full frame's
+    /// worth of cycles elapses). The core does no presentation; the frontend
+    /// reads [`Console::framebuffer`] afterwards.
+    pub fn run_frame(&mut self) {
         let mut cycles_this_frame = 0u64;
         while cycles_this_frame < CYCLES_PER_FRAME {
             let cycles = self.step();
@@ -108,30 +110,15 @@ impl Console {
             if ppu_interrupts != 0 {
                 self.bus.request_interrupt_bits(ppu_interrupts);
             }
-
             if self.ppu.borrow_mut().take_frame_ready() {
-                display.present(self.ppu.borrow().framebuffer());
                 break;
             }
         }
     }
 
-    /// Advance the machine without a window, for headless testing. Returns the
-    /// number of frames completed.
-    pub fn run_frame_headless(&mut self) {
-        let mut cycles_this_frame = 0u64;
-        while cycles_this_frame < CYCLES_PER_FRAME {
-            let cycles = self.step();
-            cycles_this_frame += cycles as u64;
-
-            let ppu_interrupts = self.ppu.borrow_mut().tick(cycles);
-            if ppu_interrupts != 0 {
-                self.bus.request_interrupt_bits(ppu_interrupts);
-            }
-            if self.ppu.borrow_mut().take_frame_ready() {
-                break;
-            }
-        }
+    /// The current frame as 160×144 shade values (0-3). Borrowed from the PPU.
+    pub fn framebuffer(&self) -> Ref<'_, [u8]> {
+        Ref::map(self.ppu.borrow(), |ppu| ppu.framebuffer())
     }
 
     pub fn get_p1(&self) -> Rc<RefCell<P1>> {

@@ -41,7 +41,7 @@ fn rom_boots_and_renders_background() {
     // A few frames: the first sets up VRAM and re-enables the LCD; subsequent
     // frames render it.
     for _ in 0..5 {
-        console.run_frame_headless();
+        console.run_frame();
     }
 
     let ppu = console.get_ppu();

@@ -1,70 +1,56 @@
-// Define constants for Game Boy button bits
-pub const GB_BUTTON_RIGHT: u8 = 0x01;
-pub const GB_BUTTON_LEFT: u8 = 0x02;
-pub const GB_BUTTON_UP: u8 = 0x04;
-pub const GB_BUTTON_DOWN: u8 = 0x08;
-pub const GB_BUTTON_A: u8 = 0x10;
-pub const GB_BUTTON_B: u8 = 0x20;
-pub const GB_BUTTON_SELECT: u8 = 0x40;
-pub const GB_BUTTON_START: u8 = 0x80;
+//! Frontend input mapping: turns host keyboard state into the Game Boy joypad
+//! byte the core's P1 register consumes, plus the fast-forward key. This is the
+//! only place that knows which host key means which console button, keeping the
+//! key bindings separate from both the window (`Display`) and the emulated
+//! joypad hardware (`P1`).
 
-pub struct Input {
-    // Raw state of host buttons
-    // Each bit represents a Game Boy button, regardless of Game Boy's P1 register selection
-    // Bit 0 - Right
-    // Bit 1 - Left
-    // Bit 2 - Up
-    // Bit 3 - Down
-    // Bit 4 - A
-    // Bit 5 - B
-    // Bit 6 - Select
-    // Bit 7 - Start
-    raw_button_state: u8,
+use crate::display::Display;
+use minifb::Key;
+
+// Game Boy button bits, matching the byte P1 consumes: a set bit means the
+// button is released, a cleared bit means pressed.
+pub const RIGHT: u8 = 0x01;
+pub const LEFT: u8 = 0x02;
+pub const UP: u8 = 0x04;
+pub const DOWN: u8 = 0x08;
+pub const A: u8 = 0x10;
+pub const B: u8 = 0x20;
+pub const SELECT: u8 = 0x40;
+pub const START: u8 = 0x80;
+
+/// Host key → Game Boy button binding.
+const KEY_MAP: &[(Key, u8)] = &[
+    (Key::Right, RIGHT),
+    (Key::Left, LEFT),
+    (Key::Up, UP),
+    (Key::Down, DOWN),
+    (Key::Z, A),
+    (Key::X, B),
+    (Key::Backspace, SELECT),
+    (Key::Enter, START),
+];
+
+/// Host key that holds fast-forward.
+const TURBO_KEY: Key = Key::Tab;
+
+/// A frame's worth of host input, decoded into console-facing values.
+pub struct InputState {
+    /// Joypad byte for `P1::update_button_state` (0 = pressed).
+    pub buttons: u8,
+    /// Whether fast-forward is held this frame.
+    pub turbo: bool,
 }
 
-impl Input {
-    pub fn new() -> Input {
-        Input {
-            raw_button_state: 0xFF, // All buttons released initially
+/// Read the current host keyboard and map it to console input.
+pub fn poll(display: &Display) -> InputState {
+    let mut buttons = 0xFF;
+    for &(key, bit) in KEY_MAP {
+        if display.is_key_down(key) {
+            buttons &= !bit;
         }
     }
-
-    // Generic update methods (can be private if only specific methods are exposed)
-    fn set_key_state(&mut self, gb_button_bit: u8, is_pressed: bool) {
-        if is_pressed {
-            self.raw_button_state &= !gb_button_bit;
-        } else {
-            self.raw_button_state |= gb_button_bit;
-        }
-    }
-
-    // Specific methods for each button
-    pub fn key_down_right(&mut self) { self.set_key_state(GB_BUTTON_RIGHT, true); }
-    pub fn key_up_right(&mut self) { self.set_key_state(GB_BUTTON_RIGHT, false); }
-
-    pub fn key_down_left(&mut self) { self.set_key_state(GB_BUTTON_LEFT, true); }
-    pub fn key_up_left(&mut self) { self.set_key_state(GB_BUTTON_LEFT, false); }
-
-    pub fn key_down_up(&mut self) { self.set_key_state(GB_BUTTON_UP, true); }
-    pub fn key_up_up(&mut self) { self.set_key_state(GB_BUTTON_UP, false); }
-
-    pub fn key_down_down(&mut self) { self.set_key_state(GB_BUTTON_DOWN, true); }
-    pub fn key_up_down(&mut self) { self.set_key_state(GB_BUTTON_DOWN, false); }
-
-    pub fn key_down_a(&mut self) { self.set_key_state(GB_BUTTON_A, true); }
-    pub fn key_up_a(&mut self) { self.set_key_state(GB_BUTTON_A, false); }
-
-    pub fn key_down_b(&mut self) { self.set_key_state(GB_BUTTON_B, true); }
-    pub fn key_up_b(&mut self) { self.set_key_state(GB_BUTTON_B, false); }
-
-    pub fn key_down_select(&mut self) { self.set_key_state(GB_BUTTON_SELECT, true); }
-    pub fn key_up_select(&mut self) { self.set_key_state(GB_BUTTON_SELECT, false); }
-
-    pub fn key_down_start(&mut self) { self.set_key_state(GB_BUTTON_START, true); }
-    pub fn key_up_start(&mut self) { self.set_key_state(GB_BUTTON_START, false); }
-
-    // Get the current raw button state
-    pub fn get_raw_button_state(&self) -> u8 {
-        self.raw_button_state
+    InputState {
+        buttons,
+        turbo: display.is_key_down(TURBO_KEY),
     }
 }

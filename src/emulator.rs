@@ -94,18 +94,23 @@ impl Emulator {
         while self.display.is_open() {
             let frame_start = Instant::now();
 
-            self.update_input();
-            let turbo = self.display.turbo_held();
-            let speed = if turbo { self.turbo_speed } else { 1.0 };
+            let input = crate::input::poll(&self.display);
+            self.apply_input(&input);
+            let speed = if input.turbo { self.turbo_speed } else { 1.0 };
 
-            // Emulate and present exactly one frame (one PPU frame of CPU work).
-            self.console.run_frame(&mut self.display);
+            // Emulate one frame in the core, then present it — presentation is a
+            // frontend concern, so the core just hands back its framebuffer.
+            self.console.run_frame();
+            {
+                let framebuffer = self.console.framebuffer();
+                self.display.present(&framebuffer);
+            }
 
             // Drain the APU each frame to keep its buffer bounded; while
             // fast-forwarding we simply drop the (over-produced) samples.
             let samples = self.console.get_apu().borrow_mut().take_samples();
             #[cfg(feature = "audio")]
-            if !turbo {
+            if !input.turbo {
                 if let Some(player) = &self.audio {
                     player.queue(&samples);
                 }
@@ -149,18 +154,17 @@ impl Emulator {
         }
     }
 
-    fn update_input(&mut self) {
-        let buttons = self.display.poll_buttons();
+    fn apply_input(&mut self, input: &crate::input::InputState) {
         // A bit going 1 (released) -> 0 (pressed) is a new key press.
-        let newly_pressed = self.prev_buttons & !buttons;
+        let newly_pressed = self.prev_buttons & !input.buttons;
         self.console
             .get_p1()
             .borrow_mut()
-            .update_button_state(buttons);
+            .update_button_state(input.buttons);
         if newly_pressed != 0 {
             self.console.request_joypad_interrupt();
         }
-        self.prev_buttons = buttons;
+        self.prev_buttons = input.buttons;
     }
 
     pub fn get_console(&self) -> &Console {
