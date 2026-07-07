@@ -34,6 +34,12 @@ pub struct MemoryBus {
     /// T-cycles remaining in an active OAM DMA transfer (0 = idle). While it
     /// runs the CPU can only reach HRAM.
     dma_remaining: u16,
+    /// T-cycles until a just-requested OAM DMA actually starts. Writing FF46
+    /// does not begin the transfer immediately: there is a one-M-cycle idle gap
+    /// (OAM stays accessible) before the busy window opens (see `start_oam_dma`).
+    dma_delay: u8,
+    /// High byte of the pending/active DMA source address (`FF46` value).
+    dma_source: u8,
     if_register: u8, // Interrupt Flag register (0xFF0F)
     ie_register: u8, // Interrupt Enable register (0xFFFF)
 }
@@ -50,6 +56,8 @@ impl MemoryBus {
             apu: Apu::new(),
             serial: Serial::new(),
             dma_remaining: 0,
+            dma_delay: 0,
+            dma_source: 0,
             if_register: 0x00,
             ie_register: 0x00,
         }
@@ -102,18 +110,44 @@ impl MemoryBus {
         self.if_register |= interrupt_type.to_bit();
     }
 
-    /// Start an OAM DMA transfer: copy 160 bytes from `value << 8` into OAM and
-    /// arm the 640-T-cycle busy window (during which only HRAM is accessible).
-    /// The copy is done up front (the OAM contents are correct immediately);
-    /// the window models the bus being unavailable to the CPU meanwhile.
-    fn oam_dma(&mut self, value: u8) {
-        self.dma_remaining = 0; // the source copy itself must not be blocked
-        let source = (value as u16) << 8;
+    /// Activate a pending OAM DMA once its startup delay elapses: copy 160 bytes
+    /// from `dma_source << 8` into OAM and open the 640-T-cycle busy window
+    /// (during which only HRAM is accessible). The copy is done atomically here;
+    /// since OAM is blocked for the whole window the CPU cannot observe the
+    /// difference from a byte-by-byte transfer, and OAM holds the new data by
+    /// the time the window closes.
+    fn start_oam_dma(&mut self) {
+        let source = (self.dma_source as u16) << 8;
         for i in 0..0xA0u16 {
-            let byte = self.read_byte(source + i);
+            // Read past the DMA block: the transfer's own source fetches are
+            // never blocked (this is the DMA unit acting as bus master).
+            let byte = self.read_raw(source + i);
             self.ppu.dma_write_oam(i as usize, byte);
         }
         self.dma_remaining = 160 * 4; // 160 M-cycles
+    }
+
+    /// Address-decoded read with no OAM-DMA blocking applied. `read_byte` layers
+    /// the block on top; the DMA source copy uses this directly.
+    fn read_raw(&self, addr: u16) -> u8 {
+        match addr {
+            0x0000..=0x7FFF => self.cartridge.read_rom(addr),
+            0x8000..=0x9FFF => self.ppu.read_vram(addr),
+            0xA000..=0xBFFF => self.cartridge.read_ram(addr),
+            0xC000..=0xDFFF => self.wram.read_byte(addr),
+            0xE000..=0xFDFF => self.wram.read_byte(addr), // Echo RAM
+            0xFE00..=0xFE9F => self.ppu.read_oam(addr),
+            0xFEA0..=0xFEFF => 0xFF, // Not usable
+            0xFF00 => self.p1.read_register(),
+            0xFF01 | 0xFF02 => self.serial.read_register(addr),
+            0xFF04..=0xFF07 => self.timer.read_register(addr),
+            0xFF0F => self.if_register | 0xE0, // top 3 bits read as 1
+            0xFF10..=0xFF3F => self.apu.read_register(addr),
+            0xFF40..=0xFF4B => self.ppu.read_register(addr),
+            0xFF03 | 0xFF08..=0xFF0E | 0xFF4C..=0xFF7F => 0xFF,
+            0xFF80..=0xFFFE => self.hram.read_byte(addr),
+            0xFFFF => self.ie_register,
+        }
     }
 }
 
@@ -136,7 +170,18 @@ impl Bus for MemoryBus {
         self.apu.tick(cycles);
         let ppu_interrupts = self.ppu.tick(cycles);
         self.if_register |= ppu_interrupts & 0x1F;
-        self.dma_remaining = self.dma_remaining.saturating_sub(cycles as u16);
+
+        // Advance the OAM DMA: run down any active window, then the startup
+        // delay of a just-requested transfer (which may activate this cycle).
+        if self.dma_remaining > 0 {
+            self.dma_remaining = self.dma_remaining.saturating_sub(cycles as u16);
+        }
+        if self.dma_delay > 0 {
+            self.dma_delay = self.dma_delay.saturating_sub(cycles);
+            if self.dma_delay == 0 {
+                self.start_oam_dma();
+            }
+        }
     }
 
     fn read_byte(&self, addr: u16) -> u8 {
@@ -146,27 +191,17 @@ impl Bus for MemoryBus {
         if self.dma_remaining > 0 && addr < 0xFF80 && addr != 0xFF0F {
             return 0xFF;
         }
-        match addr {
-            0x0000..=0x7FFF => self.cartridge.read_rom(addr),
-            0x8000..=0x9FFF => self.ppu.read_vram(addr),
-            0xA000..=0xBFFF => self.cartridge.read_ram(addr),
-            0xC000..=0xDFFF => self.wram.read_byte(addr),
-            0xE000..=0xFDFF => self.wram.read_byte(addr), // Echo RAM
-            0xFE00..=0xFE9F => self.ppu.read_oam(addr),
-            0xFEA0..=0xFEFF => 0xFF, // Not usable
-            0xFF00 => self.p1.read_register(),
-            0xFF01 | 0xFF02 => self.serial.read_register(addr),
-            0xFF04..=0xFF07 => self.timer.read_register(addr),
-            0xFF0F => self.if_register | 0xE0, // top 3 bits read as 1
-            0xFF10..=0xFF3F => self.apu.read_register(addr),
-            0xFF40..=0xFF4B => self.ppu.read_register(addr),
-            0xFF03 | 0xFF08..=0xFF0E | 0xFF4C..=0xFF7F => 0xFF,
-            0xFF80..=0xFFFE => self.hram.read_byte(addr),
-            0xFFFF => self.ie_register,
-        }
+        self.read_raw(addr)
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) {
+        // While OAM DMA runs the CPU cannot drive the external bus or OAM (the
+        // DMA owns them), so those writes are dropped — e.g. a PUSH with the
+        // stack in OAM does not land mid-transfer. I/O registers and HRAM stay
+        // writable, so FF46 can still restart the transfer.
+        if self.dma_remaining > 0 && addr < 0xFEA0 {
+            return;
+        }
         match addr {
             0x0000..=0x7FFF => self.cartridge.write_rom(addr, value), // MBC control
             0x8000..=0x9FFF => self.ppu.write_vram(addr, value),
@@ -182,7 +217,12 @@ impl Bus for MemoryBus {
             0xFF10..=0xFF3F => self.apu.write_register(addr, value),
             0xFF46 => {
                 self.ppu.write_register(addr, value);
-                self.oam_dma(value);
+                // Request an OAM DMA. It does not start now: an idle M-cycle
+                // passes (OAM stays accessible) before the busy window opens.
+                // A request while a previous transfer is still running lets that
+                // one keep blocking until the new one takes over.
+                self.dma_source = value;
+                self.dma_delay = 8;
             }
             0xFF40..=0xFF4B => self.ppu.write_register(addr, value),
             0xFF03 | 0xFF08..=0xFF0E | 0xFF4C..=0xFF7F => {}
