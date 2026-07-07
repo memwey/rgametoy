@@ -59,6 +59,10 @@ pub struct Ppu {
     dots: u16,
     pub ly: u8,
     window_line: u8,
+    /// Mode as it appears in the STAT register lags the internal mode by a few
+    /// dots on hardware; `prev_mode`/`transition_age` reproduce that delay.
+    prev_mode: PpuMode,
+    transition_age: u8,
     stat_line: bool,
     /// Latched LY==LYC coincidence. Updated only while the LCD runs (the
     /// comparison clock stops when it is off), so the STAT bit and its
@@ -109,6 +113,8 @@ impl Ppu {
             dots: 0,
             ly: 0,
             window_line: 0,
+            prev_mode: PpuMode::OamScan,
+            transition_age: 0xFF,
             stat_line: false,
             lyc_match: false,
             frame_ready: false,
@@ -172,6 +178,7 @@ impl Ppu {
         let mut requested = 0u8;
         for _ in 0..t_cycles {
             self.dots += 1;
+            let mode_before = self.mode;
             match self.mode {
                 PpuMode::OamScan => {
                     if self.dots == OAM_DOTS {
@@ -213,6 +220,13 @@ impl Ppu {
                         }
                     }
                 }
+            }
+            // Track the mode transition so the STAT-visible mode can lag it.
+            if self.mode != mode_before {
+                self.prev_mode = mode_before;
+                self.transition_age = 0;
+            } else {
+                self.transition_age = self.transition_age.saturating_add(1);
             }
             // The LY==LYC comparison clock runs only while the LCD is on.
             self.lyc_match = self.ly == self.lyc;
@@ -487,8 +501,19 @@ impl Ppu {
         !self.lcd_enabled() || self.mode != PpuMode::Drawing
     }
 
+    /// The mode as software observes it: the STAT bits and OAM/VRAM locking
+    /// lag the internal mode transition by a few dots on hardware.
+    fn visible_mode(&self) -> PpuMode {
+        if self.transition_age < 4 {
+            self.prev_mode
+        } else {
+            self.mode
+        }
+    }
+
     fn can_access_oam(&self) -> bool {
-        !self.lcd_enabled() || (self.mode != PpuMode::OamScan && self.mode != PpuMode::Drawing)
+        let mode = self.visible_mode();
+        !self.lcd_enabled() || (mode != PpuMode::OamScan && mode != PpuMode::Drawing)
     }
 
     pub fn read_vram(&self, addr: u16) -> u8 {
@@ -531,7 +556,8 @@ impl Ppu {
             0xFF40 => self.lcdc,
             0xFF41 => {
                 let lyc = if self.lyc_match { 0x04 } else { 0x00 };
-                0x80 | (self.stat & 0x78) | lyc | self.mode as u8
+                // The STAT mode bits lag the internal mode by a few dots.
+                0x80 | (self.stat & 0x78) | lyc | self.visible_mode() as u8
             }
             0xFF42 => self.scy,
             0xFF43 => self.scx,
