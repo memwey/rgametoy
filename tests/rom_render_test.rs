@@ -44,9 +44,7 @@ fn rom_boots_and_renders_background() {
         console.run_frame();
     }
 
-    let ppu = console.get_ppu();
-    let ppu = ppu.borrow();
-    let fb = ppu.framebuffer();
+    let fb = console.framebuffer();
 
     // Top-left 8×8 tile is solid colour 3 -> shade 3.
     assert_eq!(fb[0], 3, "top-left pixel rendered");

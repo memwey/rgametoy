@@ -45,7 +45,7 @@ impl Emulator {
         let audio = {
             // The core APU emits at its own fixed rate; the player resamples to
             // the device. The core is never told the device rate.
-            let source_rate = console.get_apu().borrow().output_rate();
+            let source_rate = console.audio_output_rate();
             let player = crate::emulator::audio::AudioPlayer::new(source_rate);
             match &player {
                 Some(p) => println!("audio: output at {} Hz", p.sample_rate()),
@@ -106,16 +106,13 @@ impl Emulator {
             // Emulate one frame in the core, then present it — presentation is a
             // frontend concern, so the core just hands back its framebuffer.
             self.console.run_frame();
-            {
-                let framebuffer = self.console.framebuffer();
-                self.display.present(&framebuffer);
-            }
+            self.display.present(self.console.framebuffer());
 
             // Drain the APU each frame to keep its buffer bounded. Only feed
             // the device at normal speed: off-speed produces the wrong number
             // of samples per real second, so we mute (drop) instead — which
             // keeps the resampler a fixed source→device ratio.
-            let samples = self.console.get_apu().borrow_mut().take_samples();
+            let samples = self.console.take_audio_samples();
             let normal_speed = speed == 1.0;
             #[cfg(feature = "audio")]
             if normal_speed {
@@ -165,10 +162,7 @@ impl Emulator {
     fn apply_input(&mut self, input: &crate::emulator::input::InputState) {
         // A bit going 1 (released) -> 0 (pressed) is a new key press.
         let newly_pressed = self.prev_buttons & !input.buttons;
-        self.console
-            .get_p1()
-            .borrow_mut()
-            .update_button_state(input.buttons);
+        self.console.set_buttons(input.buttons);
         if newly_pressed != 0 {
             self.console.request_joypad_interrupt();
         }

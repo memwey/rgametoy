@@ -9,51 +9,29 @@ pub mod ppu;
 pub mod timer;
 pub mod wram;
 
-use crate::console::apu::Apu;
 use crate::console::bus::{Bus, MemoryBus};
 use crate::console::cartridge::Cartridge;
 use crate::console::cpu::Cpu;
 use crate::console::interrupts::InterruptType;
-use crate::console::joypad::P1;
-use crate::console::ppu::Ppu;
-use crate::console::timer::Timer;
-use std::cell::{Ref, RefCell};
-use std::rc::Rc;
 
 // The Game Boy runs at 4.194304 MHz. One frame is 154 scanlines × 456 dots =
 // 70224 T-cycles.
 const CYCLES_PER_FRAME: u64 = 70224;
 
+/// The emulated Game Boy: the CPU plus the system bus that owns every
+/// memory-mapped peripheral.
 pub struct Console {
     cpu: Cpu,
     bus: MemoryBus,
     total_cycles: u64,
-    p1: Rc<RefCell<P1>>,
-    ppu: Rc<RefCell<Ppu>>,
-    timer: Rc<RefCell<Timer>>,
-    apu: Rc<RefCell<Apu>>,
 }
 
 impl Console {
     pub fn new() -> Console {
-        let p1 = Rc::new(RefCell::new(P1::new()));
-        let ppu = Rc::new(RefCell::new(Ppu::new()));
-        let timer = Rc::new(RefCell::new(Timer::new()));
-        let apu = Rc::new(RefCell::new(Apu::new()));
-
         Console {
             cpu: Cpu::new(),
-            bus: MemoryBus::new(
-                Rc::clone(&p1),
-                Rc::clone(&ppu),
-                Rc::clone(&timer),
-                Rc::clone(&apu),
-            ),
+            bus: MemoryBus::new(),
             total_cycles: 0,
-            p1,
-            ppu,
-            timer,
-            apu,
         }
     }
 
@@ -98,50 +76,47 @@ impl Console {
         self.bus.write_byte(0xFF0F, 0xE1);
     }
 
+    /// Fetch/execute one instruction (or service an interrupt), then advance
+    /// the peripherals through the bus. Returns T-cycles consumed.
     pub fn step(&mut self) -> u8 {
-        let cycles = self.cpu.step(&mut self.bus as &mut dyn Bus);
+        let cycles = self.cpu.step(&mut self.bus);
         self.total_cycles += cycles as u64;
-        if self.timer.borrow_mut().tick(cycles) {
-            self.bus.request_interrupt(InterruptType::Timer);
-        }
-        self.apu.borrow_mut().tick(cycles);
+        self.bus.tick(cycles);
         cycles
     }
 
-    /// Advance the machine until the PPU completes one frame (or a full frame's
-    /// worth of cycles elapses). The core does no presentation; the frontend
-    /// reads [`Console::framebuffer`] afterwards.
+    /// Run until the PPU completes one frame (or a full frame of cycles
+    /// elapses). Read [`Console::framebuffer`] afterwards to present.
     pub fn run_frame(&mut self) {
         let mut cycles_this_frame = 0u64;
         while cycles_this_frame < CYCLES_PER_FRAME {
-            let cycles = self.step();
-            cycles_this_frame += cycles as u64;
-
-            let ppu_interrupts = self.ppu.borrow_mut().tick(cycles);
-            if ppu_interrupts != 0 {
-                self.bus.request_interrupt_bits(ppu_interrupts);
-            }
-            if self.ppu.borrow_mut().take_frame_ready() {
+            cycles_this_frame += self.step() as u64;
+            if self.bus.take_frame_ready() {
                 break;
             }
         }
     }
 
-    /// The current frame as 160×144 shade values (0-3). Borrowed from the PPU.
-    pub fn framebuffer(&self) -> Ref<'_, [u8]> {
-        Ref::map(self.ppu.borrow(), |ppu| ppu.framebuffer())
+    /// The current frame as 160×144 shade values (0-3).
+    pub fn framebuffer(&self) -> &[u8] {
+        self.bus.framebuffer()
     }
 
-    pub fn get_p1(&self) -> Rc<RefCell<P1>> {
-        Rc::clone(&self.p1)
+    /// Drain the APU's buffered stereo samples (at [`audio_output_rate`]).
+    ///
+    /// [`audio_output_rate`]: Console::audio_output_rate
+    pub fn take_audio_samples(&mut self) -> Vec<f32> {
+        self.bus.take_audio_samples()
     }
 
-    pub fn get_ppu(&self) -> Rc<RefCell<Ppu>> {
-        Rc::clone(&self.ppu)
+    pub fn audio_output_rate(&self) -> u32 {
+        self.bus.audio_output_rate()
     }
 
-    pub fn get_apu(&self) -> Rc<RefCell<Apu>> {
-        Rc::clone(&self.apu)
+    /// Update the joypad button state (0 = pressed) and raise a Joypad
+    /// interrupt if any newly-pressed button was passed.
+    pub fn set_buttons(&mut self, state: u8) {
+        self.bus.set_buttons(state);
     }
 
     pub fn request_joypad_interrupt(&mut self) {
