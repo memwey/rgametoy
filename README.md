@@ -32,11 +32,15 @@ PPU 扫描线渲染(背景 / 窗口 / 精灵)、OAM DMA、串口(截获输出)�
 
 CPU 是**逐 M-cycle 精确**的(每次访存/内部周期都推进外设)。通过 Blargg 标准测试
 ROM(经串口输出结果):`cpu_instrs`(全部 11 项)、`instr_timing`、`mem_timing` 均
-**Passed**;PPU 通过 **dmg-acid2**(渲染出完整参考笑脸)。
+**Passed**;PPU 通过 **dmg-acid2**(渲染出完整参考笑脸);mooneye acceptance 40/75。
+
+测试方法、各套件通过情况与遗留问题(亚周期/T-cycle 前沿)详见
+[docs/testing.md](docs/testing.md)。
 
 ```sh
-cargo run --release --example run_serial -- path/to/test.gb   # 打印串口输出(Blargg)
-cargo run --release --example screenshot -- rom.gb out.bmp    # 无头渲染一帧到 BMP
+cargo run --release --example run_serial  -- path/to/test.gb   # 打印串口输出(Blargg)
+cargo run --release --example run_mooneye -- path/to/test.gb   # 打印 PASS / FAIL(mooneye)
+cargo run --release --example screenshot  -- rom.gb out.bmp    # 无头渲染一帧到 BMP
 ```
 
 ## 参考资料
