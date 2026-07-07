@@ -1,4 +1,4 @@
-use rgametoy::console::registers::Registers;
+use rgametoy::console::cpu::registers::Registers;
 
 #[test]
 fn test_set_af_masking() {

@@ -6,7 +6,6 @@ pub mod hram;
 pub mod interrupts;
 pub mod joypad;
 pub mod ppu;
-pub mod registers;
 pub mod timer;
 pub mod wram;
 
