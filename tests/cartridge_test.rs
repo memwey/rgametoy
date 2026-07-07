@@ -59,3 +59,54 @@ fn header_title_is_parsed() {
     let cart = Cartridge::from_bytes(data);
     assert_eq!(cart.title(), "TESTROM");
 }
+
+fn battery_rom() -> Vec<u8> {
+    let mut data = vec![0u8; 0x8000];
+    data[0x0147] = 0x03; // MBC1 + RAM + BATTERY
+    data[0x0149] = 0x02; // 8 KB external RAM
+    data
+}
+
+#[test]
+fn battery_ram_round_trips_through_a_save() {
+    let mut cart = Cartridge::from_bytes(battery_rom());
+    assert!(cart.has_battery());
+    assert!(!cart.ram_dirty());
+
+    // The game enables RAM and writes save data.
+    cart.write_rom(0x0000, 0x0A);
+    cart.write_ram(0xA000, 0xAB);
+    cart.write_ram(0xA123, 0xCD);
+    assert!(cart.ram_dirty(), "external RAM writes mark the save dirty");
+
+    // The emulator would dump this to <rom>.sav.
+    let saved = cart.ram().to_vec();
+    cart.clear_ram_dirty();
+    assert!(!cart.ram_dirty());
+
+    // A fresh cartridge restores the save and reads it back.
+    let mut restored = Cartridge::from_bytes(battery_rom());
+    restored.load_ram(&saved);
+    assert!(!restored.ram_dirty(), "restoring a save is not a game write");
+    restored.write_rom(0x0000, 0x0A); // enable RAM to read
+    assert_eq!(restored.read_ram(0xA000), 0xAB);
+    assert_eq!(restored.read_ram(0xA123), 0xCD);
+}
+
+#[test]
+fn cartridge_without_battery_is_not_persisted() {
+    let mut data = vec![0u8; 0x8000];
+    data[0x0147] = 0x01; // MBC1, no RAM/battery
+    data[0x0149] = 0x02;
+    let cart = Cartridge::from_bytes(data);
+    assert!(!cart.has_battery());
+}
+
+#[test]
+fn battery_type_without_ram_is_not_persisted() {
+    let mut data = vec![0u8; 0x8000];
+    data[0x0147] = 0x0F; // MBC3 + TIMER + BATTERY, but...
+    data[0x0149] = 0x00; // ...no external RAM
+    let cart = Cartridge::from_bytes(data);
+    assert!(!cart.has_battery(), "nothing to persist without RAM");
+}

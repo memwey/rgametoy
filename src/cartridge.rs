@@ -16,6 +16,10 @@ pub struct Cartridge {
     rom: Vec<u8>,
     ram: Vec<u8>,
     kind: MbcKind,
+    /// Whether the cartridge has battery-backed RAM (persistent save data).
+    has_battery: bool,
+    /// Set when the game writes to external RAM; cleared once flushed to disk.
+    ram_dirty: bool,
 
     rom_bank: usize,
     ram_bank: usize,
@@ -32,6 +36,8 @@ impl Cartridge {
             rom: vec![0; ROM_BANK_SIZE * 2],
             ram: Vec::new(),
             kind: MbcKind::None,
+            has_battery: false,
+            ram_dirty: false,
             rom_bank: 1,
             ram_bank: 0,
             ram_enabled: false,
@@ -42,7 +48,8 @@ impl Cartridge {
     /// Build a cartridge from a raw ROM image, reading the header to pick the
     /// memory bank controller and external RAM size.
     pub fn from_bytes(data: Vec<u8>) -> Cartridge {
-        let kind = match data.get(0x0147).copied().unwrap_or(0) {
+        let type_byte = data.get(0x0147).copied().unwrap_or(0);
+        let kind = match type_byte {
             0x00 => MbcKind::None,
             0x01..=0x03 => MbcKind::Mbc1,
             0x0F..=0x13 => MbcKind::Mbc3,
@@ -52,6 +59,12 @@ impl Cartridge {
                 MbcKind::Mbc1
             }
         };
+
+        // Cartridge types whose external RAM is battery-backed (persistent).
+        let has_battery = matches!(
+            type_byte,
+            0x03 | 0x06 | 0x09 | 0x0D | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E | 0x22 | 0xFF
+        );
 
         let ram_size = match data.get(0x0149).copied().unwrap_or(0) {
             0x02 => 0x0000_2000, // 8 KB
@@ -70,11 +83,40 @@ impl Cartridge {
             rom,
             ram: vec![0; ram_size],
             kind,
+            has_battery,
+            ram_dirty: false,
             rom_bank: 1,
             ram_bank: 0,
             ram_enabled: false,
             banking_mode: 0,
         }
+    }
+
+    /// Whether this cartridge persists its external RAM (has a battery).
+    pub fn has_battery(&self) -> bool {
+        self.has_battery && !self.ram.is_empty()
+    }
+
+    /// The current external RAM contents (the save data).
+    pub fn ram(&self) -> &[u8] {
+        &self.ram
+    }
+
+    /// Restore previously saved external RAM (from a `.sav` file). Extra bytes
+    /// are ignored; a shorter save leaves the remainder zeroed.
+    pub fn load_ram(&mut self, data: &[u8]) {
+        let n = self.ram.len().min(data.len());
+        self.ram[..n].copy_from_slice(&data[..n]);
+        self.ram_dirty = false;
+    }
+
+    /// True if the game has written to RAM since the last flush.
+    pub fn ram_dirty(&self) -> bool {
+        self.ram_dirty
+    }
+
+    pub fn clear_ram_dirty(&mut self) {
+        self.ram_dirty = false;
     }
 
     /// Overwrite the start of ROM bank 0 with `program`. Used to inject small
@@ -169,6 +211,7 @@ impl Cartridge {
         let index = self.ram_bank * RAM_BANK_SIZE + (addr as usize - 0xA000);
         if let Some(slot) = self.ram.get_mut(index) {
             *slot = value;
+            self.ram_dirty = true;
         }
     }
 

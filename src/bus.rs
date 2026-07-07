@@ -62,6 +62,10 @@ impl MemoryBus {
         &self.cartridge
     }
 
+    pub fn cartridge_mut(&mut self) -> &mut Cartridge {
+        &mut self.cartridge
+    }
+
     pub fn request_interrupt(&mut self, interrupt_type: InterruptType) {
         self.if_register |= interrupt_type.to_bit();
     }

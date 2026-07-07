@@ -1,12 +1,18 @@
 use crate::cartridge::Cartridge;
 use crate::console::Console;
 use crate::display::Display;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Flush battery RAM to disk at most this often (in frames, ~2 s at 60 fps)
+/// while the game keeps writing saves.
+const AUTOSAVE_INTERVAL_FRAMES: u32 = 120;
 
 pub struct Emulator {
     console: Console,
     display: Display,
     prev_buttons: u8,
+    /// `<rom>.sav` path, set only for battery-backed cartridges.
+    save_path: Option<PathBuf>,
     #[cfg(feature = "audio")]
     audio: Option<crate::audio::AudioPlayer>,
 }
@@ -32,21 +38,38 @@ impl Emulator {
             console,
             display: Display::new(),
             prev_buttons: 0xFF,
+            save_path: None,
             #[cfg(feature = "audio")]
             audio,
         }
     }
 
-    /// Load a `.gb` ROM from disk and boot into the DMG post-boot state.
+    /// Load a `.gb` ROM from disk and boot into the DMG post-boot state. For a
+    /// battery-backed cartridge, restore its save from a sibling `.sav` file if
+    /// one exists.
     pub fn load_rom<P: AsRef<Path>>(&mut self, path: P) -> std::io::Result<()> {
-        let data = std::fs::read(path)?;
+        let data = std::fs::read(&path)?;
         let cartridge = Cartridge::from_bytes(data);
         println!("Loaded ROM: \"{}\"", cartridge.title());
         self.console.load_cartridge(cartridge);
+
+        if self.console.get_bus_mut().cartridge().has_battery() {
+            let save_path = path.as_ref().with_extension("sav");
+            match std::fs::read(&save_path) {
+                Ok(saved) => {
+                    self.console.get_bus_mut().cartridge_mut().load_ram(&saved);
+                    println!("Loaded save: {}", save_path.display());
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => eprintln!("could not read save {}: {e}", save_path.display()),
+            }
+            self.save_path = Some(save_path);
+        }
         Ok(())
     }
 
     pub fn run(&mut self) {
+        let mut frames_since_save = 0u32;
         while self.display.is_open() {
             self.update_input();
             self.console.run_frame(&mut self.display);
@@ -60,6 +83,31 @@ impl Emulator {
             }
             #[cfg(not(feature = "audio"))]
             let _ = samples;
+
+            frames_since_save += 1;
+            if frames_since_save >= AUTOSAVE_INTERVAL_FRAMES {
+                self.save_ram();
+                frames_since_save = 0;
+            }
+        }
+        // Final flush on exit.
+        self.save_ram();
+    }
+
+    /// Write battery RAM to the `.sav` file if it has changed since last flush.
+    fn save_ram(&mut self) {
+        let path = match &self.save_path {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        let bus = self.console.get_bus_mut();
+        if !bus.cartridge().ram_dirty() {
+            return;
+        }
+        let ram = bus.cartridge().ram().to_vec();
+        match std::fs::write(&path, &ram) {
+            Ok(()) => bus.cartridge_mut().clear_ram_dirty(),
+            Err(e) => eprintln!("failed to write save {}: {e}", path.display()),
         }
     }
 
