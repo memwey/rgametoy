@@ -83,6 +83,15 @@ pub fn enable(
         // Output length in frames at the device rate; produce that many frames
         // worth of (resampled) APU output.
         let out_frames = output.length() as usize;
+        // While fast-forward is held, the rAF loop drives the console at the
+        // turbo multiplier and fast-forward is muted (matches desktop). Emit
+        // silence and don't step here — stepping too would double-drive it.
+        if host.keys_down.contains(crate::input::TURBO_KEY) {
+            let silence = vec![0.0f32; out_frames];
+            let _ = output.copy_to_channel_with_start_in_channel(&silence, 0, 0);
+            let _ = output.copy_to_channel_with_start_in_channel(&silence, 1, 0);
+            return;
+        }
         // Source frames required, rounded up so we never under-fill.
         let need_source_frames =
             (out_frames * source_rate as usize).div_ceil(device_rate as usize);

@@ -20,7 +20,7 @@ use web_sys::{
 use crate::audio::AudioPlayer;
 use crate::canvas::{get_canvas, get_element_by_id, Presenter, RGBA_LEN};
 use crate::input::{from_keydown, InputState, TURBO_KEY};
-use crate::pacing::{frames_to_run, DMG_FRAME_MS, MAX_CATCHUP_MS};
+use crate::pacing::{frames_to_run, DMG_FRAME_MS, MAX_CATCHUP_MS, MAX_FRAMES_PER_TICK};
 use crate::palette::{rgba_table, shade_to_rgba, PALETTES};
 use crate::rom::{cartridge_title, load_rom};
 use crate::storage::{rom_hash, SaveRecord};
@@ -28,9 +28,14 @@ use crate::ui::{get_html_element, set_text};
 use crate::weblog;
 use web_sys::IdbDatabase;
 
-/// How many frames the rAF loop ticks when the turbo key is held. 4× is
-/// enough to feel snappy without breaking tests / accuracy-sensitive games.
-const TURBO_FRAMES_PER_TICK: u32 = 4;
+/// Fast-forward multiplier: emulation runs this many times real time while the
+/// turbo key is held. Matches the desktop frontend's default. Paced against the
+/// wall clock (not per repaint), so it's a consistent 4× on any display.
+const TURBO_SPEED: f64 = 4.0;
+
+/// Per-tick frame cap for fast-forward — generous enough that 4× never binds at
+/// common refresh rates, low enough that a stall can't avalanche.
+const TURBO_MAX_FRAMES_PER_TICK: u32 = 12;
 
 /// How many rAF ticks between auto-saves of battery-backed RAM. 120 frames
 /// is 2 s at 60 Hz — slow enough not to thrash the disk, fast enough that
@@ -445,31 +450,44 @@ impl Inner {
         }
 
         self.apply_input();
-        if !self.paused && self.has_rom && !self.audio_enabled {
+        if !self.paused && self.has_rom {
             let now = js_sys::Date::now();
-            if self.keys_down.contains(TURBO_KEY) {
-                // Fast-forward: a fixed burst per tick. Reset the accumulator
-                // so releasing turbo doesn't leave a backlog to replay.
-                for _ in 0..TURBO_FRAMES_PER_TICK {
-                    self.console.run_frame();
-                }
-                self.frame_accum_ms = 0.0;
+            let dt = if self.last_tick_ms == 0.0 {
+                DMG_FRAME_MS
             } else {
-                // Pace against real elapsed time, not the display refresh: a
-                // fixed one-frame-per-rAF would run 2× on a 120 Hz panel. Run
-                // as many ~59.7 Hz frames as fit the elapsed time, capped.
-                let dt = if self.last_tick_ms == 0.0 {
-                    DMG_FRAME_MS
-                } else {
-                    (now - self.last_tick_ms).min(MAX_CATCHUP_MS)
-                };
-                let (n, accum) = frames_to_run(self.frame_accum_ms, dt);
+                (now - self.last_tick_ms).min(MAX_CATCHUP_MS)
+            };
+            if self.keys_down.contains(TURBO_KEY) {
+                // Fast-forward: the rAF loop drives at a fixed multiple of real
+                // time, on *any* refresh rate — even when audio is on (the audio
+                // callback goes silent and stops stepping while turbo is held,
+                // so it doesn't double-drive). Then drain the APU buffer the
+                // sped-up frames produced, so audio resumes cleanly on release.
+                let (n, accum) =
+                    frames_to_run(self.frame_accum_ms, dt * TURBO_SPEED, TURBO_MAX_FRAMES_PER_TICK);
                 self.frame_accum_ms = accum;
                 for _ in 0..n {
                     self.console.run_frame();
                 }
+                let _ = self.console.take_audio_samples();
+                self.last_tick_ms = now;
+            } else if !self.audio_enabled {
+                // Normal speed, no audio: pace against real elapsed time, not
+                // the display refresh (a fixed one-frame-per-rAF runs 2× on a
+                // 120 Hz panel).
+                let (n, accum) = frames_to_run(self.frame_accum_ms, dt, MAX_FRAMES_PER_TICK);
+                self.frame_accum_ms = accum;
+                for _ in 0..n {
+                    self.console.run_frame();
+                }
+                self.last_tick_ms = now;
+            } else {
+                // Audio on, no turbo: the audio callback drives emulation; the
+                // rAF loop only paints. Keep the pacing clock fresh so a switch
+                // back to rAF driving (turbo, or disabling audio) starts clean.
+                self.last_tick_ms = 0.0;
+                self.frame_accum_ms = 0.0;
             }
-            self.last_tick_ms = now;
         }
         let fb = self.console.framebuffer();
         let table = rgba_table(self.palette_idx);

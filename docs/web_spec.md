@@ -184,6 +184,8 @@ ScriptProcessorNode.onaudioprocess (audio 线程)
 
 `take_audio_samples` 内部清空 console 内部 sample buffer,所以不会积压。
 
+**驱动权**:音频开时,`onaudioprocess` 回调**驱动**模拟(step 到填满这批缓冲),rAF 只负责画;音频关时,rAF 循环按真实时间驱动(见 §6.1)。**快进**(按住 `Space`)时改由 rAF 以固定倍速(4×,对齐 desktop、按墙钟计而非按刷新率)驱动,音频回调则输出静音且不 step——即"加速即静音",也避免两边同时 step 造成双重驱动。
+
 ### 6.3 ROM 加载时序
 
 ```text
