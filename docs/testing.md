@@ -10,25 +10,27 @@
 
 测试分两层——**灰盒**模块单测(快,钉内部时序)+ **黑盒** ROM 套件(ground truth)。
 
-### 1.1 模块单测(`cargo test`)—— 大多黑盒,少数白盒就近放 src
+### 1.1 模块单测(`cargo test`)—— 黑盒;要偷看只走调试工具
 
-两类:
+原则两条:
+1. **测试不自己伸手抠内部**——不读私有字段、不给测试专门开 `pub`。默认全走软件能观测的面:
+   寄存器读写(`read_register`/`write_register`=MMIO)、`tick`、framebuffer、中断、内存可访问性,
+   和真实程序、和每个测试 ROM 一样。
+2. **确实要看软件读不到的内部量时,走"调试工具提供的接口"**——`--features debug` 后面的
+   `Ppu::get_mode`/`debug_state`(同一套给 `inspect`/`ppu_probe` 用的检查器),而不是自己抠字段。
+   这类测试也 `#[cfg(feature="debug")]` 门控,`cargo test --features debug` 才编译/跑;默认公共
+   API 保持黑盒。
 
-- **黑盒**(主体):放 `tests/*.rs`(每文件独立 crate,只能用 `pub` API),全走
-  `write_register`/`write_byte`=MMIO、`tick`、`read_register`/`framebuffer`——和真实程序
-  驱动芯片一样。哪怕测的是内部时序,视角仍是黑盒(用真硬件接口)。
-- **白盒**(少数,需要软件读不到的**内部**量,如 PPU 的内部 mode):放**对应 src 模块的
-  `#[cfg(test)]`**,直接读私有字段(`self.mode`/`self.ly`/`self.dots`),**不必**为测试把内部
-  `pub` 出去。目前 `src/console/ppu.rs` 的 `#[cfg(test)]` 就放了 OAM-scan 80 dot、开屏首行、
-  STAT 滞后、mode-3 长度/精灵惩罚聚合这几个逐点时序测试。
-
-内部观测量若也想给 `inspect`/`ppu_probe` 用,就 gate 到 `--features debug` 后面
-(`Ppu::get_mode`、`debug_state`),默认构建不暴露(见 §1.2 末的调试器)。
+一个 Game Boy 的"外部可观测面"是封闭的,大多数内部时序其实能从这面直接测:例如 STAT mode
+时间线(mode 2 到 dot 83、mode 3 从 dot 84,含 4-dot 滞后)、开屏首行(LY 到 dot 452、无 scan)——
+这些是默认黑盒测试。只有 mode-3 **内部长度**(172 + 惩罚)这种软件读不到绝对值的,才放
+`ppu_test.rs` 的 `#[cfg(feature="debug")] mod debug_timing`,用 `get_mode` 观测;其可观测后果
+另由 rom_suite 的 mooneye `intr_2`/`lcdon` 黑盒兜底(见 §1.2)。
 
 | 位置 | 覆盖 |
 |---|---|
-| `src/console/ppu.rs` `#[cfg(test)]` | 逐点时序:OAM-scan 80 dot、开屏首行 452 dot、STAT 滞后、mode-3 长度/精灵惩罚聚合 |
-| `tests/ppu_test.rs` | 行为级(黑盒):LY==LYC、OAM/VRAM 锁、精灵优先级/OBP、WX<7 裁剪、行内改色、整帧渲染 |
+| `tests/ppu_test.rs`(默认黑盒) | STAT mode 时间线、开屏首行(LY 452 + 无 scan)、LY==LYC、OAM/VRAM 锁、精灵优先级/OBP、WX<7 裁剪、行内改色、整帧渲染 |
+| `tests/ppu_test.rs` `#[cfg(debug)] mod debug_timing` | mode-3 内部长度 / SCX / 精灵惩罚聚合(经调试工具 `get_mode`,`--features debug` 才跑) |
 | `tests/cpu_instructions_test.rs` / `registers_test.rs` | 指令语义、标志位、寄存器 |
 | `tests/cpu_integration_test.rs` | 整程序跑通、`ADD HL` 进位、`ie_push` 向量重算 |
 | `tests/timer_test.rs` | 16 位计数器、四频率、下降沿毛刺(TAC/DIV)、重载延迟三态 |
