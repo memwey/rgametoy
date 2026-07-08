@@ -29,9 +29,10 @@ pub struct Console {
     total_cycles: u64,
 }
 
-/// A full snapshot of the machine, for instant save/load. It is a deep copy of
-/// the [`Console`] (including cartridge RAM but also the ROM), so it is
-/// self-contained.
+/// A full snapshot of the machine, for instant save/load. It deep-copies the
+/// mutable machine state (CPU/PPU/APU/timer, WRAM/HRAM, cartridge RAM); the
+/// read-only ROM is shared via `Arc` rather than copied (see `Cartridge`), so a
+/// snapshot is self-contained yet cheap.
 #[derive(Clone)]
 pub struct SaveState(Console);
 

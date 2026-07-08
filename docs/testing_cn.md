@@ -32,7 +32,7 @@
 | 位置 | 覆盖 |
 |---|---|
 | `tests/ppu_test.rs`(默认黑盒) | STAT mode 时间线、开屏首行(LY 452 + 无 scan)、LY==LYC、OAM/VRAM 锁、精灵优先级/OBP、WX<7 裁剪、行内改色、整帧渲染 |
-| `tests/ppu_test.rs` `#[cfg(debug)] mod debug_timing` | mode-3 内部长度 / SCX / 精灵惩罚聚合(经调试工具 `get_mode`,`--features debug` 才跑) |
+| `tests/ppu_test.rs` `#[cfg(feature = "debug")] mod debug_timing` | mode-3 内部长度 / SCX / 精灵惩罚聚合(经调试工具 `get_mode`,`--features debug` 才跑) |
 | `tests/cpu_instructions_test.rs` / `registers_test.rs` | 指令语义、标志位、寄存器 |
 | `tests/cpu_integration_test.rs` | 整程序跑通、`ADD HL` 进位、`ie_push` 向量重算、非法码锁死 |
 | `tests/timer_test.rs` | 16 位计数器、四频率、下降沿毛刺(TAC/DIV)、重载延迟三态 |

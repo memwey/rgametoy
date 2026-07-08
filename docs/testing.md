@@ -42,7 +42,7 @@ rom_suite's mooneye `intr_2`/`lcdon` (see §1.2).
 | Location | Covers |
 |---|---|
 | `tests/ppu_test.rs` (default black-box) | STAT-mode timeline, first line after enable (LY 452 + no scan), LY==LYC, OAM/VRAM locks, sprite priority/OBP, WX<7 clipping, mid-line register changes, whole-frame rendering |
-| `tests/ppu_test.rs` `#[cfg(debug)] mod debug_timing` | mode-3 internal length / SCX / stacked-sprite-penalty aggregation (via the debug tool `get_mode`, `--features debug` only) |
+| `tests/ppu_test.rs` `#[cfg(feature = "debug")] mod debug_timing` | mode-3 internal length / SCX / stacked-sprite-penalty aggregation (via the debug tool `get_mode`, `--features debug` only) |
 | `tests/cpu_instructions_test.rs` / `registers_test.rs` | instruction semantics, flags, registers |
 | `tests/cpu_integration_test.rs` | whole programs, `ADD HL` carries, `ie_push` vector re-evaluation, illegal-opcode lock-up |
 | `tests/timer_test.rs` | 16-bit counter, four frequencies, falling-edge glitches (TAC/DIV), the three-state reload delay |
