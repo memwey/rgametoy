@@ -139,6 +139,7 @@ GB_TEST_ROMS=/path/to/game-boy-test-roms \
 cargo run --release --example run_serial  -- path/to/test.gb      # print serial output (Blargg)
 cargo run --release --example run_mooneye -- path/to/test.gb      # print PASS / FAIL (mooneye)
 cargo run --release --example screenshot  -- rom.gb out.bmp       # headless-render one frame to BMP
+cargo run --release --example benchmark   -- rom.gb [frames]      # headless throughput: fps + xrealtime
 ```
 
 ## References

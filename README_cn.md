@@ -119,6 +119,7 @@ GB_TEST_ROMS=/path/to/game-boy-test-roms \
 cargo run --release --example run_serial  -- path/to/test.gb      # 打印串口输出(Blargg)
 cargo run --release --example run_mooneye -- path/to/test.gb      # 打印 PASS / FAIL(mooneye)
 cargo run --release --example screenshot  -- rom.gb out.bmp       # 无头渲染一帧到 BMP
+cargo run --release --example benchmark   -- rom.gb [帧数]        # 无头跑吞吐:fps + 倍速
 ```
 
 ## 参考资料
