@@ -279,7 +279,7 @@ impl Inner {
             rom_title: self.title.clone(),
             ram,
             // Preserve the saved quick-state slot: autosave rewrites the whole
-            // record, so writing `None` here would wipe the user's F5 save.
+            // record, so writing `None` here would wipe the user's quick-save.
             quick_state: self.quick_state.clone(),
             updated_at: js_sys::Date::now(),
         };

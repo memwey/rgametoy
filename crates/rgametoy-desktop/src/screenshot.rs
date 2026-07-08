@@ -1,6 +1,7 @@
 //! Framebuffer → image, a frontend (presentation) concern: the core only emits
 //! 160×144 shade values, and turning those into coloured pixels + a file is a
-//! host choice, kept out of `console`. Both the interactive emulator (F2) and
+//! host choice, kept out of `console`. Both the interactive emulator (the "2"
+//! key) and
 //! the headless `screenshot` example encode through here, so the on-screen and
 //! saved images share one palette and one encoder.
 //!

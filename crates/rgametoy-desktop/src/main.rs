@@ -7,9 +7,9 @@ fn main() -> ExitCode {
         Some(path) => path.clone(),
         None => {
             eprintln!("usage: rgametoy <rom.gb> [turbo_multiplier]");
-            eprintln!("keys: arrows=D-pad  Z=A  X=B  Enter=Start  Backspace=Select");
-            eprintln!("      hold Tab=fast-forward  F5/F7=save/load state  F2=screenshot");
-            eprintln!("      F3=cycle palette  Esc=quit");
+            eprintln!("keys: arrows=D-pad  Z=A  X=B  Enter=Start  RightShift=Select");
+            eprintln!("      hold Space=fast-forward  5/7=save/load state  2=screenshot");
+            eprintln!("      3=cycle palette  Esc=quit");
             eprintln!("data dir: ./saves/ + ./screenshots/ (override base with RGAMETOY_DATA_DIR)");
             return ExitCode::FAILURE;
         }
@@ -18,7 +18,7 @@ fn main() -> ExitCode {
     let mut emulator = Emulator::new();
     if let Some(speed) = args.get(2).and_then(|s| s.parse::<f64>().ok()) {
         emulator.set_turbo_speed(speed);
-        log::info(&format!("fast-forward (Tab) at {speed}x"));
+        log::info(&format!("fast-forward (Space) at {speed}x"));
     }
 
     if let Err(e) = emulator.load_rom(&rom_path) {

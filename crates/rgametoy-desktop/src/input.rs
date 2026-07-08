@@ -18,7 +18,8 @@ pub const B: u8 = 0x20;
 pub const SELECT: u8 = 0x40;
 pub const START: u8 = 0x80;
 
-/// Host key → Game Boy button binding.
+/// Host key → Game Boy button binding. Kept identical to the web frontend
+/// (`crates/rgametoy-web/src/input.rs`) so muscle memory carries across.
 const KEY_MAP: &[(Key, u8)] = &[
     (Key::Right, RIGHT),
     (Key::Left, LEFT),
@@ -26,19 +27,19 @@ const KEY_MAP: &[(Key, u8)] = &[
     (Key::Down, DOWN),
     (Key::Z, A),
     (Key::X, B),
-    (Key::Backspace, SELECT),
+    (Key::RightShift, SELECT),
     (Key::Enter, START),
 ];
 
 /// Host key that holds fast-forward.
-const TURBO_KEY: Key = Key::Tab;
+const TURBO_KEY: Key = Key::Space;
 /// Host keys for the instant save / load save-state slot.
-const SAVE_KEY: Key = Key::F5;
-const LOAD_KEY: Key = Key::F7;
+const SAVE_KEY: Key = Key::Key5;
+const LOAD_KEY: Key = Key::Key7;
 /// Host key that saves a screenshot.
-const SCREENSHOT_KEY: Key = Key::F2;
+const SCREENSHOT_KEY: Key = Key::Key2;
 /// Host key that cycles the display palette.
-const PALETTE_KEY: Key = Key::F3;
+const PALETTE_KEY: Key = Key::Key3;
 
 /// A frame's worth of host input, decoded into console-facing values.
 pub struct InputState {

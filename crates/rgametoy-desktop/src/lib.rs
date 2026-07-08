@@ -326,8 +326,8 @@ impl Emulator {
         }
     }
 
-    /// Handle the edge-triggered hotkeys (one press acts once): F5/F7 store and
-    /// restore the instant save-state slot, F2 saves a screenshot.
+    /// Handle the edge-triggered hotkeys (one press acts once): 5/7 store and
+    /// restore the instant save-state slot, 2 saves a screenshot.
     fn handle_hotkeys(&mut self, input: &crate::input::InputState) {
         if input.save && !self.prev_save {
             self.quick_state = Some(self.console.save_state_bytes());

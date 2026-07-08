@@ -4,7 +4,7 @@
 //! ```text
 //! <data-dir>/
 //! ├── saves/        <rom-stem>-<rom-hash>.sav   (battery SRAM)
-//! └── screenshots/  <rom-title>-<timestamp>.bmp (F2 captures)
+//! └── screenshots/  <rom-title>-<timestamp>.bmp (the "2" key captures)
 //! ```
 //!
 //! A save is raw SRAM (portable across emulators), so it carries no ROM

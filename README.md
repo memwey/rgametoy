@@ -15,14 +15,15 @@ cargo run --release --features audio -- rom.gb     # enable sound (pulls in cpal
 cargo run --release -- rom.gb 8                    # 2nd arg = fast-forward multiplier (default 4)
 ```
 
-Key mapping: arrow keys = D-pad, `Z` = A, `X` = B, `Enter` = Start,
-`Backspace` = Select, **hold `Tab` = fast-forward**, `F5` = save state /
-`F7` = load state, `F2` = screenshot, `F3` = cycle palette, `Esc` = quit.
+Key mapping (identical in the desktop and web frontends): arrow keys = D-pad,
+`Z` = A, `X` = B, `Enter` = Start, `Right Shift` = Select,
+**hold `Space` = fast-forward**, `5` = save state / `7` = load state,
+`2` = screenshot, `3` = cycle palette, `Esc` = quit (desktop).
 The window title shows the live frame rate, speed multiplier, and current palette.
 
 Fast-forward is paced against the CPU clock: each emulated frame's real-time
 budget is `frame_time / multiplier`, still presenting once per frame; releasing
-`Tab` returns to full speed immediately. Audio is muted while fast-forwarding
+`Space` returns to full speed immediately. Audio is muted while fast-forwarding
 (to avoid over-producing samples).
 
 **Data directory**: saves and screenshots go into two subfolders under one base
@@ -32,16 +33,16 @@ the `RGAMETOY_DATA_DIR` environment variable:
 ```text
 <base>/
 ├── saves/        <rom-file-name>-<8-hex-content-hash>.sav   (battery SRAM)
-└── screenshots/  <rom-title>-<epoch-millis>.bmp             (F2 screenshots)
+└── screenshots/  <rom-title>-<epoch-millis>.bmp             ("2" key screenshots)
 ```
 
-**Screenshots**: `F2` saves the current frame at native 160×144 as a 24-bit BMP
+**Screenshots**: the `2` key saves the current frame at native 160×144 as a 24-bit BMP
 (pixel-exact, good for debugging) and prints the path. The encoder is shared with
 the headless `-p rgametoy-desktop --example screenshot` (`crates/rgametoy-desktop/src/screenshot.rs`), so the window
 and the screenshots use the same colours.
 
 **Palettes**: the core only emits shade values 0–3, so mapping them to colours is
-a pure frontend choice (`crates/rgametoy-desktop/src/palette.rs`). `F3` cycles through a few
+a pure frontend choice (`crates/rgametoy-desktop/src/palette.rs`). The `3` key cycles through a few
 built-in palettes — the classic DMG green plus tinted variants (grayscale, amber,
 ocean, berry) that colourise the four shades. Screenshots use whichever palette is
 active. The default is DMG green.
@@ -67,13 +68,13 @@ back on load, flushed with debounce while running, and saved on exit.
 Implemented: the full SM83 instruction set (including the CB prefix), interrupts
 (VBlank/STAT/Timer/Serial/Joypad), the timer, pixel-FIFO PPU rendering
 (background / window / sprites, dot-by-dot in mode 3), OAM DMA, serial (captured
-output), keyboard input, screenshots (F2), battery saves (`.sav`), and
+output), keyboard input, screenshots (`2` key), battery saves (`.sav`), and
 **4-channel APU sound** (2× square + wave + noise, with sweep / envelope / length
 counters). The APU emulation core is pure Rust and always compiled; real audio
 output goes through the `audio` feature (cpal), off by default.
 
-Also supports **fast-forward** (hold Tab, configurable multiplier) and **instant
-save / load state** (F5/F7, a serialized snapshot of the whole machine held in an
+Also supports **fast-forward** (hold Space, configurable multiplier) and **instant
+save / load state** (`5`/`7`, a serialized snapshot of the whole machine held in an
 in-memory slot). The PPU is a **pixel FIFO** (dot-by-dot in mode 3, so
 mid-scanline register changes take effect). Not yet implemented: MBC3 RTC, MBC2.
 

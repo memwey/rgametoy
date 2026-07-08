@@ -10,9 +10,9 @@
 //! keyboard layout. The user can still type `Z` to chat while playing.
 //!
 //! The hotkeys for save/load/screenshot/palette are `Digit5`, `Digit7`,
-//! `Digit2`, `Digit3` respectively — we deliberately don't reuse the desktop
-//! crate's F-keys so this frontend can be driven from a laptop without
-//! modifier acrobatics.
+//! `Digit2`, `Digit3`. The whole binding scheme is kept identical to the
+//! desktop frontend (`crates/rgametoy-desktop/src/input.rs`) — digits, not
+//! F-keys, because F5/F11/F12 etc. are reserved by the browser.
 
 /// Game Boy button bits, matching the byte P1 consumes. A set bit means the
 /// button is *released*; a cleared bit means pressed.

@@ -3,7 +3,7 @@
 //! the window and screenshots pick one of these. The first is the classic DMG
 //! green; the rest tint the four shades into "some colour" (the same trick the
 //! Game Boy Color used to colourise monochrome games). Cycled at runtime with
-//! F3; index 0 is the default.
+//! the "3" key; index 0 is the default.
 
 /// Four RGB colours, one per shade (index 0 = lightest, 3 = darkest).
 pub type Palette = [(u8, u8, u8); 4];
