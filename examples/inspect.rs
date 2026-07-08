@@ -6,11 +6,13 @@
 //! ```
 //!
 //! Commands:
-//!   regs  <rom> [frames]        run N frames (default 240), print a snapshot
-//!   break <rom> <PChex>         run until PC == <PC>, print a snapshot
-//!   watch <rom> <PChex> [count] print a snapshot each time PC == <PC> (default 20)
-//!   line  <rom> <LY>            print PPU mode/dot changes while on scanline LY
-//!   oam   <rom>                 run until sprites are on-screen, list them
+//!   regs   <rom> [frames]            run N frames (default 240), print a snapshot
+//!   break  <rom> <PChex>             run until PC == <PC>, print a snapshot
+//!   watch  <rom> <PChex> [count]     print a snapshot each time PC == <PC> (default 20)
+//!   line   <rom> <LY>                print PPU mode/dot changes while on scanline LY
+//!   dumpat <rom> <PChex> <addr> <len> [count]  at each PC hit, hex-dump a memory range
+//!   oamat  <rom> <PChex> [LY]        at the PC hit (optionally when LY matches), dump OAM
+//!   oam    <rom>                     run until sprites are on-screen, list them
 
 #[cfg(not(feature = "debug"))]
 fn main() {
@@ -25,7 +27,7 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!("usage: inspect <rom> <regs|break|watch|line|oam> [args]");
+        eprintln!("usage: inspect <rom> <regs|break|watch|line|dumpat|oamat|oam> [args]");
         std::process::exit(2);
     }
     let rom = &args[1];

@@ -140,14 +140,14 @@ impl Timer {
             0xFF07 => {
                 // The TAC store lands on T3 of the write M-cycle, but the bus
                 // ticks the timer through T4 before delivering it. Replay the
-                // hardware order — write applied at counter-1, then the final
-                // counter increment evaluated under the *new* TAC — and
-                // reconcile with the edge the already-run T4 saw under the old
-                // TAC. This is what lets a TAC enable landing one T-cycle
-                // before the selected bit falls still catch that falling edge
-                // (mooneye `rapid_toggle`), without moving the global bus
-                // write position (which is T4; moving it regresses the
-                // control-flow write-timing tests).
+                // hardware order — write applied as of the pre-increment
+                // counter (`prev_counter`), then the final counter increment
+                // evaluated under the *new* TAC — and reconcile with the edge
+                // the already-run T4 saw under the old TAC. This is what lets a
+                // TAC enable landing one T-cycle before the selected bit falls
+                // still catch that falling edge (mooneye `rapid_toggle`),
+                // without moving the global bus write position (which is T4;
+                // moving it regresses the control-flow write-timing tests).
                 let new_tac = value & 0x07;
                 let before = self.prev_counter;
                 // Edge already counted by this M-cycle's T4 under the old TAC.

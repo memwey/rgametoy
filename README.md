@@ -26,21 +26,26 @@ PPU 扫描线渲染(背景 / 窗口 / 精灵)、OAM DMA、串口(截获输出)�
 是纯 Rust、默认编译;真实音频输出通过 `audio` feature(cpal)开启,默认关闭。
 
 另外支持**快进/加速**(按住 Tab,倍率可配)和**即时存档 / 读档 (save state)**
-(F5/F7,整机深拷贝到内存槽,零依赖)。尚未实现:像素级 (FIFO) PPU 时序、MBC3 RTC、MBC2。
+(F5/F7,整机深拷贝到内存槽,零依赖)。PPU 是**像素 FIFO**(mode 3 逐点、行内改寄存器
+生效)。尚未实现:MBC3 RTC、MBC2。
 
 ### 测试 ROM 验证
 
-CPU 是**逐 M-cycle 精确**的(每次访存/内部周期都推进外设)。通过 Blargg 标准测试
-ROM(经串口输出结果):`cpu_instrs`(全部 11 项)、`instr_timing`、`mem_timing` 均
-**Passed**;PPU 通过 **dmg-acid2**(渲染出完整参考笑脸);mooneye acceptance 59/75。
+CPU 是**逐 M-cycle 精确**的(每次访存/内部周期都推进外设),PPU mode-3 逐点。通过
+Blargg(`cpu_instrs` 全 11 项、`instr_timing`、`mem_timing` 均 **Passed**)、**dmg-acid2**
+(渲染出完整参考笑脸)、mooneye acceptance **63/75(非 boot 全过**,剩 12 个全是 boot 类,
+不在 DMG 范围);mealybug tearoom 1/24(最严一档,详见文档)。
 
-测试方法、各套件通过情况与遗留问题(亚周期/T-cycle 前沿)详见
-[docs/testing.md](docs/testing.md)。
+测试方法(灰盒模块单测 + 黑盒 ROM 套件)、各套件通过情况与遗留问题(亚周期/T-cycle 前沿)
+详见 [docs/testing.md](docs/testing.md)。
 
 ```sh
-cargo run --release --example run_serial  -- path/to/test.gb   # 打印串口输出(Blargg)
-cargo run --release --example run_mooneye -- path/to/test.gb   # 打印 PASS / FAIL(mooneye)
-cargo run --release --example screenshot  -- rom.gb out.bmp    # 无头渲染一帧到 BMP
+cargo test --release                                              # 灰盒模块单测
+GB_TEST_ROMS=/path/to/game-boy-test-roms \
+    cargo test --release --test rom_suite                         # mooneye 非 boot + Blargg
+cargo run --release --example run_serial  -- path/to/test.gb      # 打印串口输出(Blargg)
+cargo run --release --example run_mooneye -- path/to/test.gb      # 打印 PASS / FAIL(mooneye)
+cargo run --release --example screenshot  -- rom.gb out.bmp       # 无头渲染一帧到 BMP
 ```
 
 ## 参考资料
