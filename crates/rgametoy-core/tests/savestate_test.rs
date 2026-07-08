@@ -1,3 +1,9 @@
+//! Black-box save-state restore checks via the observable machine (CPU
+//! registers, WRAM) — a complement to the byte-level round-trip in
+//! `savestate_bytes_test.rs`. Gated on the `persistence` feature that provides
+//! the save-state API.
+#![cfg(feature = "persistence")]
+
 extern crate rgametoy_core;
 
 use rgametoy_core::bus::Bus;
@@ -14,7 +20,7 @@ fn save_and_load_state_restores_the_machine() {
     for _ in 0..10 {
         console.step();
     }
-    let state = console.save_state();
+    let state = console.save_state_bytes();
     let a_at_snapshot = console.get_cpu().get_registers().get_a();
     let pc_at_snapshot = console.get_cpu().get_pc();
 
@@ -30,20 +36,20 @@ fn save_and_load_state_restores_the_machine() {
     );
 
     // Restore, and everything should be back at the snapshot.
-    console.load_state(&state);
+    console.load_state_bytes(&state).expect("load");
     assert_eq!(console.get_cpu().get_registers().get_a(), a_at_snapshot, "CPU restored");
     assert_eq!(console.get_cpu().get_pc(), pc_at_snapshot, "PC restored");
     assert_eq!(console.get_bus_mut().read_byte(0xC000), 0xAA, "WRAM restored");
 }
 
-/// A snapshot is independent of later mutation of the live machine (deep copy).
+/// A serialized snapshot is independent of later mutation of the live machine.
 #[test]
-fn snapshot_is_a_deep_copy() {
+fn snapshot_is_independent_of_later_writes() {
     let mut console = Console::new();
     console.get_bus_mut().write_byte(0xC000, 0x11);
-    let state = console.save_state();
+    let state = console.save_state_bytes();
 
     console.get_bus_mut().write_byte(0xC000, 0x22);
-    console.load_state(&state);
+    console.load_state_bytes(&state).expect("load");
     assert_eq!(console.get_bus_mut().read_byte(0xC000), 0x11);
 }

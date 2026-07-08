@@ -72,6 +72,10 @@ pub struct Inner {
     pub screenshot_pending: bool,
     pub palette_pending: bool,
     pub reset_pending: bool,
+    /// In-memory mirror of the persisted quick-state slot, so the debounced
+    /// battery-RAM autosave can rewrite the record without clobbering the
+    /// user's saved state.
+    pub quick_state: Option<Vec<u8>>,
     /// Set once the user has enabled audio. When true, the audio callback
     /// drives the emulator forward in time (so audio and visual stay
     /// in lock-step); the rAF loop only repaints.
@@ -145,6 +149,7 @@ impl Inner {
             screenshot_pending: false,
             palette_pending: false,
             reset_pending: false,
+            quick_state: None,
             audio_enabled: false,
             audio: None,
             audio_closure: None,
@@ -212,6 +217,7 @@ impl Inner {
             if let Some(qs) = &rec.quick_state {
                 let _ = inner.console.load_state_bytes(qs);
             }
+            inner.quick_state = rec.quick_state.clone();
             inner.set_status("restored save");
         });
     }
@@ -249,7 +255,9 @@ impl Inner {
             rom_hash: self.rom_hash.clone(),
             rom_title: self.title.clone(),
             ram,
-            quick_state: None, // not touched by autosave
+            // Preserve the saved quick-state slot: autosave rewrites the whole
+            // record, so writing `None` here would wipe the user's F5 save.
+            quick_state: self.quick_state.clone(),
             updated_at: js_sys::Date::now(),
         };
         crate::storage::put_record_async(&self.storage.borrow(), record);
@@ -361,6 +369,7 @@ impl Inner {
         if self.save_pending {
             self.save_pending = false;
             let bytes = self.console.save_state_bytes();
+            self.quick_state = Some(bytes.clone());
             self.set_status("saved state");
             self.write_quick_state_to_storage(bytes);
         }
@@ -418,12 +427,15 @@ impl Inner {
         shade_to_rgba(fb, table, &mut self.rgba_buf);
         let _ = present(&self.ctx, &self.rgba_buf);
 
-        // Debounced auto-save: every AUTOSAVE_DEBOUNCE frames, flush
-        // battery RAM to IDB. We don't gate on `ram_dirty` because the
-        // cartridge `ram_dirty` flag is cleared on the first read; the
-        // whole point of persistence is to capture a fresh write.
-        if self.has_rom && self.frame_idx.is_multiple_of(AUTOSAVE_DEBOUNCE) {
+        // Debounced auto-save: on the interval, flush battery RAM to IDB *only
+        // when the game has actually written to it* since the last flush — an
+        // event-driven trigger, not a blind timer — then clear the dirty flag.
+        if self.has_rom
+            && self.frame_idx.is_multiple_of(AUTOSAVE_DEBOUNCE)
+            && self.console.get_bus_mut().cartridge().ram_dirty()
+        {
             self.persist_record();
+            self.console.get_bus_mut().cartridge_mut().clear_ram_dirty();
         }
         self.frame_idx = self.frame_idx.wrapping_add(1);
 

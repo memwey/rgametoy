@@ -1,4 +1,5 @@
 use crate::bus::Bus;
+#[cfg(feature = "persistence")]
 use crate::state::{write_bool, write_u8, Reader, SaveStateError};
 
 pub mod registers;
@@ -373,6 +374,7 @@ impl Cpu {
     /// Append the CPU state: 12 bytes of registers, then six flag/control
     /// bytes (`ime`, `ime_pending`, `halted`, `halt_bug`, `locked`,
     /// `cycles`). Order must match [`Self::read_state`].
+    #[cfg(feature = "persistence")]
     pub fn write_state(&self, out: &mut Vec<u8>) {
         self.registers.write_state(out);
         write_bool(out, self.ime);
@@ -383,6 +385,7 @@ impl Cpu {
         write_u8(out, self.cycles);
     }
 
+    #[cfg(feature = "persistence")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.registers.read_state(r)?;
         self.ime = r.read_bool()?;

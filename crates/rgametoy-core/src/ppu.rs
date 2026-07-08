@@ -11,6 +11,7 @@
 
 use std::collections::VecDeque;
 
+#[cfg(feature = "persistence")]
 use crate::state::{write_bool, write_u16_le, write_u8, Reader, SaveStateError};
 
 const VRAM_SIZE: usize = 0x2000; // 8 KB
@@ -30,6 +31,7 @@ const INT_LCDSTAT: u8 = 0x02;
 
 /// On-disk tag for [`PpuMode`]. Bumping the enum's source-order won't change
 /// these — they're pinned so v1 save states stay readable across refactors.
+#[cfg(feature = "persistence")]
 #[repr(u8)]
 #[derive(Clone, Copy)]
 enum PpuModeTag {
@@ -39,6 +41,7 @@ enum PpuModeTag {
     Drawing = 3,
 }
 
+#[cfg(feature = "persistence")]
 impl PpuMode {
     fn tag(self) -> u8 {
         match self {
@@ -50,6 +53,7 @@ impl PpuMode {
     }
 }
 
+#[cfg(feature = "persistence")]
 impl PpuModeTag {
     fn from(b: u8) -> Option<PpuMode> {
         match b {
@@ -63,6 +67,7 @@ impl PpuModeTag {
 }
 
 /// On-disk tag for the BG fetcher's micro-step.
+#[cfg(feature = "persistence")]
 #[repr(u8)]
 #[derive(Clone, Copy)]
 enum FetchStateTag {
@@ -72,6 +77,7 @@ enum FetchStateTag {
     Push = 3,
 }
 
+#[cfg(feature = "persistence")]
 impl FetchState {
     fn tag(self) -> u8 {
         match self {
@@ -83,6 +89,7 @@ impl FetchState {
     }
 }
 
+#[cfg(feature = "persistence")]
 impl FetchStateTag {
     fn from(b: u8) -> Option<FetchState> {
         match b {
@@ -844,6 +851,7 @@ impl Ppu {
     /// The order of every field is mirrored by [`Self::read_state`] and is
     /// part of the on-disk format — do not reorder without bumping
     /// `SAVE_STATE_VERSION`.
+    #[cfg(feature = "persistence")]
     pub fn write_state(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.vram);
         out.extend_from_slice(&self.oam);
@@ -913,6 +921,7 @@ impl Ppu {
         write_bool(out, self.stat_irq_pending);
     }
 
+    #[cfg(feature = "persistence")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.vram.copy_from_slice(r.read_exact(VRAM_SIZE)?);
         self.oam.copy_from_slice(r.read_exact(OAM_SIZE)?);

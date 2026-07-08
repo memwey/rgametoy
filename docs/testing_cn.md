@@ -41,7 +41,8 @@
 | `tests/dma_test.rs` | OAM DMA 启动延迟、源总线阻塞(VRAM/外部)、echo 源、I/O 可读 |
 | `tests/joypad_test.rs` | P1 选择线映射、中断按选择线门控、松开/切组暴露已按键的边沿 |
 | `tests/apu_test.rs` | 四声道、包络/扫频/长度、DAC |
-| `tests/cartridge_test.rs` / `save_test.rs` / `savestate_test.rs` | MBC、电池存档、即时存档 |
+| `tests/cartridge_test.rs` / `save_test.rs` | MBC、电池存档 |
+| `tests/savestate_test.rs` / `savestate_bytes_test.rs`(`--features persistence`) | 存档字节回环(重序列化相等、lockstep、拒绝时不改机器) |
 | `tests/serial_test.rs` / `rom_render_test.rs` | 串口截获、整帧渲染 |
 | `tests/common/mod.rs` | 共享脚手架(黑盒 PPU helper + ROM runner),被 `tests/*` 按需 `mod common;` 引入 |
 

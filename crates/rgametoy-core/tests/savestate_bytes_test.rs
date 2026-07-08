@@ -3,6 +3,7 @@
 //! sequencer, APU sample buffer, etc.) is non-trivial, snapshotted, mutated
 //! further, and restored — the post-restore machine must match the snapshot
 //! exactly.
+#![cfg(feature = "persistence")]
 
 use rgametoy_core::cartridge::Cartridge;
 use rgametoy_core::state::{SAVE_STATE_MAGIC, SAVE_STATE_VERSION};

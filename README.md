@@ -100,8 +100,11 @@ be a third frontend on the same core.
      passive:  Cartridge (MBC1/3/5 + battery)   P1 (joypad)   WRAM   HRAM
 ```
 
-- **`rgametoy-core`** is the emulated machine — no host I/O, fully deterministic, so a
-  save state is just a deep copy (the read-only ROM is shared via `Arc`, not copied).
+- **`rgametoy-core`** is the emulated machine — no host I/O, fully deterministic.
+  Save-states (the opt-in `persistence` feature — a real Game Boy can't snapshot
+  itself, so the featureless core is *just* the machine) serialize the whole
+  machine to a portable byte blob; the read-only ROM is shared via `Arc`, never
+  copied into it.
 - The **`Cpu` is the only bus master**: every memory access and internal delay calls
   `bus.tick(n)`, which advances the *timed* peripherals (PPU/Timer/APU/Serial) by `n`
   T-cycles. That single seam is what makes read/write timing observable. The *passive*

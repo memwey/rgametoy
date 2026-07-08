@@ -5,6 +5,7 @@ use crate::interrupts::InterruptType;
 use crate::joypad::P1;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
+#[cfg(feature = "persistence")]
 use crate::state::{write_u16_le, write_u8, Reader, SaveStateError};
 use crate::timer::Timer;
 use crate::wram::Wram;
@@ -216,6 +217,7 @@ impl MemoryBus {
     /// `dma_source`) is written *before* the IF/IE registers so that a
     /// transfer requested by a just-loaded game state resumes at the same
     /// point in its startup delay.
+    #[cfg(feature = "persistence")]
     pub fn write_state(&self, out: &mut Vec<u8>) {
         self.cartridge.write_state(out);
         self.wram.write_state(out);
@@ -232,6 +234,7 @@ impl MemoryBus {
         write_u8(out, self.ie_register);
     }
 
+    #[cfg(feature = "persistence")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.cartridge.read_state(r)?;
         self.wram.read_state(r)?;

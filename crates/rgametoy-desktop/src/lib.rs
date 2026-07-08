@@ -19,7 +19,7 @@ pub mod screenshot;
 pub mod audio;
 
 use rgametoy_core::cartridge::Cartridge;
-use rgametoy_core::{Console, SaveState};
+use rgametoy_core::Console;
 use crate::display::Display;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -57,8 +57,9 @@ pub struct Emulator {
     display: Display,
     /// Speed multiplier applied while the fast-forward key is held.
     turbo_speed: f64,
-    /// Instant save-state slot, plus previous key states for edge detection.
-    quick_state: Option<SaveState>,
+    /// Instant save-state slot (a serialized blob), plus previous key states
+    /// for edge detection.
+    quick_state: Option<Vec<u8>>,
     prev_save: bool,
     prev_load: bool,
     prev_screenshot: bool,
@@ -311,13 +312,15 @@ impl Emulator {
     /// restore the instant save-state slot, F2 saves a screenshot.
     fn handle_hotkeys(&mut self, input: &crate::input::InputState) {
         if input.save && !self.prev_save {
-            self.quick_state = Some(self.console.save_state());
+            self.quick_state = Some(self.console.save_state_bytes());
             log::info("save state stored");
         }
         if input.load && !self.prev_load {
             if let Some(state) = &self.quick_state {
-                self.console.load_state(state);
-                log::info("save state loaded");
+                match self.console.load_state_bytes(state) {
+                    Ok(()) => log::info("save state loaded"),
+                    Err(e) => log::error(&format!("save state load failed: {e}")),
+                }
             }
         }
         if input.screenshot && !self.prev_screenshot {

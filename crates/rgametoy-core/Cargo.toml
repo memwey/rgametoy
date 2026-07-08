@@ -10,3 +10,8 @@ default = []
 # for calibrating against hardware test ROMs. Off by default so a release build
 # carries no debug surface. See examples/inspect.rs.
 debug = []
+# Whole-machine save-state serialization to a portable byte blob, plus the
+# battery-RAM snapshot API. This is an *emulator* convenience (a real Game Boy
+# can't snapshot itself), so it's opt-in: the featureless core is just the
+# machine. Frontends that persist saves (desktop, web) enable it.
+persistence = []

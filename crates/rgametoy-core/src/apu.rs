@@ -10,6 +10,7 @@
 //! This module is pure logic with no I/O; actual playback lives behind the
 //! optional `audio` feature (see `audio.rs`).
 
+#[cfg(feature = "persistence")]
 use crate::state::{write_bool, write_u16_le, write_u32_le, write_u64_le, write_u8, Reader, SaveStateError};
 
 const CPU_HZ: f64 = 4_194_304.0;
@@ -748,6 +749,7 @@ impl Default for Apu {
 // -- Save state -------------------------------------------------------------
 
 impl Envelope {
+    #[cfg(feature = "persistence")]
     fn write_state(&self, out: &mut Vec<u8>) {
         write_u8(out, self.start_volume);
         write_bool(out, self.add_mode);
@@ -756,6 +758,7 @@ impl Envelope {
         write_u8(out, self.timer);
     }
 
+    #[cfg(feature = "persistence")]
     fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.start_volume = r.read_u8()?;
         self.add_mode = r.read_bool()?;
@@ -767,6 +770,7 @@ impl Envelope {
 }
 
 impl SquareChannel {
+    #[cfg(feature = "persistence")]
     fn write_state(&self, out: &mut Vec<u8>) {
         write_bool(out, self.enabled);
         write_bool(out, self.dac.enabled);
@@ -786,6 +790,7 @@ impl SquareChannel {
         write_u16_le(out, self.sweep_shadow);
     }
 
+    #[cfg(feature = "persistence")]
     fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.enabled = r.read_bool()?;
         self.dac.enabled = r.read_bool()?;
@@ -808,6 +813,7 @@ impl SquareChannel {
 }
 
 impl WaveChannel {
+    #[cfg(feature = "persistence")]
     fn write_state(&self, out: &mut Vec<u8>) {
         write_bool(out, self.enabled);
         write_bool(out, self.dac.enabled);
@@ -821,6 +827,7 @@ impl WaveChannel {
         out.extend_from_slice(&self.wave_ram);
     }
 
+    #[cfg(feature = "persistence")]
     fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.enabled = r.read_bool()?;
         self.dac.enabled = r.read_bool()?;
@@ -837,6 +844,7 @@ impl WaveChannel {
 }
 
 impl NoiseChannel {
+    #[cfg(feature = "persistence")]
     fn write_state(&self, out: &mut Vec<u8>) {
         write_bool(out, self.enabled);
         write_bool(out, self.dac.enabled);
@@ -850,6 +858,7 @@ impl NoiseChannel {
         self.env.write_state(out);
     }
 
+    #[cfg(feature = "persistence")]
     fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.enabled = r.read_bool()?;
         self.dac.enabled = r.read_bool()?;
@@ -870,6 +879,7 @@ impl Apu {
     /// `hp_factor` fields are currently computed at construction time from
     /// the constant `OUTPUT_RATE`, but we still serialize them so the blob
     /// stays bit-exact even if that constant ever becomes runtime-config.
+    #[cfg(feature = "persistence")]
     pub fn write_state(&self, out: &mut Vec<u8>) {
         self.ch1.write_state(out);
         self.ch2.write_state(out);
@@ -893,6 +903,7 @@ impl Apu {
         }
     }
 
+    #[cfg(feature = "persistence")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.ch1.read_state(r)?;
         self.ch2.read_state(r)?;

@@ -18,6 +18,9 @@ pub mod interrupts;
 pub mod joypad;
 pub mod ppu;
 pub mod serial;
+/// Whole-machine save-state serialization — an *emulator* convenience, not part
+/// of the Game Boy — behind the `persistence` feature. See the module docs.
+#[cfg(feature = "persistence")]
 pub mod state;
 pub mod timer;
 pub mod wram;
@@ -25,6 +28,7 @@ pub mod wram;
 use crate::bus::{Bus, MemoryBus};
 use crate::cartridge::Cartridge;
 use crate::cpu::Cpu;
+#[cfg(feature = "persistence")]
 use crate::state::{
     crc32, write_u32_le, write_u64_le, Reader, SaveStateError, SAVE_STATE_MAGIC, SAVE_STATE_VERSION,
 };
@@ -41,13 +45,6 @@ pub struct Console {
     bus: MemoryBus,
     total_cycles: u64,
 }
-
-/// A full snapshot of the machine, for instant save/load. It deep-copies the
-/// mutable machine state (CPU/PPU/APU/timer, WRAM/HRAM, cartridge RAM); the
-/// read-only ROM is shared via `Arc` rather than copied (see `Cartridge`), so a
-/// snapshot is self-contained yet cheap.
-#[derive(Clone)]
-pub struct SaveState(Console);
 
 impl Console {
     pub fn new() -> Console {
@@ -138,12 +135,14 @@ impl Console {
 
     /// Battery-backed external RAM as raw bytes (empty if the cartridge
     /// has no external RAM). Length is `Cartridge::ram_size()` if non-zero.
+    #[cfg(feature = "persistence")]
     pub fn save_ram_bytes(&self) -> Vec<u8> {
         self.bus.cartridge().save_ram_bytes()
     }
 
     /// Replace the cartridge's external RAM. Silently truncates if the
     /// supplied slice is shorter than the cartridge's RAM size.
+    #[cfg(feature = "persistence")]
     pub fn load_ram_bytes(&mut self, bytes: &[u8]) {
         self.bus.cartridge_mut().load_ram_bytes(bytes);
     }
@@ -159,20 +158,11 @@ impl Console {
         self.bus.take_serial_output()
     }
 
-    /// Capture a full snapshot of the machine (instant save state).
-    pub fn save_state(&self) -> SaveState {
-        SaveState(self.clone())
-    }
-
-    /// Restore a previously captured snapshot (instant load state).
-    pub fn load_state(&mut self, state: &SaveState) {
-        self.clone_from(&state.0);
-    }
-
     /// Serialize the entire machine to a portable byte blob (magic, version,
-    /// a CRC32, then each module's state). This is what gets handed to a
-    /// frontend for persistence; the in-memory `SaveState` is only useful
-    /// within one process. The on-disk layout is documented in `state.rs`.
+    /// a CRC32, then each module's state). This is the sole save-state
+    /// mechanism: hold the bytes in memory for an instant slot, or write them
+    /// to disk / IndexedDB to persist. The on-disk layout is in `state.rs`.
+    #[cfg(feature = "persistence")]
     pub fn save_state_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&SAVE_STATE_MAGIC);
@@ -196,6 +186,7 @@ impl Console {
     /// cartridge's ROM is *not* part of the blob — the same ROM must be
     /// loaded into the console (via [`Console::load_cartridge`]) before
     /// calling this, so the cartridge's `ram` size matches the snapshot.
+    #[cfg(feature = "persistence")]
     pub fn load_state_bytes(&mut self, bytes: &[u8]) -> Result<(), SaveStateError> {
         if bytes.len() < SAVE_STATE_MAGIC.len() + 1 + 4 {
             return Err(SaveStateError::Truncated);

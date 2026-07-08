@@ -14,7 +14,7 @@ audio = ["dep:cpal"]
 debug = ["rgametoy-core/debug"]
 
 [dependencies]
-rgametoy-core = { workspace = true }
+rgametoy-core = { workspace = true, features = ["persistence"] }
 minifb = { workspace = true }
 cpal = { workspace = true, optional = true }
 

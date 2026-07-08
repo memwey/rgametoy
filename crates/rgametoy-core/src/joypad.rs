@@ -8,6 +8,7 @@
 //! a press in the group the game isn't currently reading raises nothing — and
 //! selecting a group in which a button is already held is itself an edge.
 
+#[cfg(feature = "persistence")]
 use crate::state::{write_u8, Reader, SaveStateError};
 
 #[derive(Clone)]
@@ -73,11 +74,13 @@ impl Default for P1 {
 impl P1 {
     /// Append the joypad's two-byte state to `out`: `button_state` first
     /// (0 = pressed) then the P14/P15 select lines.
+    #[cfg(feature = "persistence")]
     pub fn write_state(&self, out: &mut Vec<u8>) {
         write_u8(out, self.button_state);
         write_u8(out, self.select);
     }
 
+    #[cfg(feature = "persistence")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.button_state = r.read_u8()?;
         self.select = r.read_u8()?;

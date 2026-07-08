@@ -81,8 +81,9 @@ PPU 像素-FIFO 渲染(背景 / 窗口 / 精灵,mode 3 逐点)、OAM DMA、串�
      被动:    Cartridge (MBC1/3/5 + 电池)   P1 (手柄)   WRAM   HRAM
 ```
 
-- **`rgametoy-core`** 是被模拟的机器——无宿主 I/O、完全确定性,所以存档就是一次深拷贝
-  (只读的 ROM 用 `Arc` 共享、不复制)。
+- **`rgametoy-core`** 是被模拟的机器——无宿主 I/O、完全确定性。存档(可选的 `persistence`
+  feature —— 真 GB 没法给自己拍快照,所以无 feature 的裸核心*就是*那台机器)把整机序列化成
+  一段可移植字节;只读的 ROM 用 `Arc` 共享、从不拷进去。
 - **`Cpu` 是唯一的总线主控**:每次访存和内部延迟都调 `bus.tick(n)`,把**受时钟**的外设
   (PPU/Timer/APU/Serial)推进 `n` 个 T-cycle。**这一条 seam** 正是让读写时序可观测的关键。
   **被动**外设(卡带、手柄、RAM)只在被访问时响应。

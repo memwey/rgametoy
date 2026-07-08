@@ -3,6 +3,7 @@
 //! a selected counter bit ANDed with the timer-enable. This reproduces the
 //! DIV-write and TAC-change glitches and the one-M-cycle TIMA reload delay.
 
+#[cfg(feature = "persistence")]
 use crate::state::{write_bool, write_u16_le, write_u8, Reader, SaveStateError};
 
 #[derive(Clone)]
@@ -188,6 +189,7 @@ impl Timer {
     /// documented in `state.rs`. Counter is written before `prev_counter`
     /// so the "DIV-write glitch" replay in `read_state` sees consistent
     /// values.
+    #[cfg(feature = "persistence")]
     pub fn write_state(&self, out: &mut Vec<u8>) {
         write_u16_le(out, self.counter);
         write_u16_le(out, self.prev_counter);
@@ -199,6 +201,7 @@ impl Timer {
         write_bool(out, self.just_reloaded);
     }
 
+    #[cfg(feature = "persistence")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.counter = r.read_u16_le()?;
         self.prev_counter = r.read_u16_le()?;
