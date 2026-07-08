@@ -10,3 +10,20 @@ edition = "2021"
 rgametoy-core = { path = "crates/rgametoy-core" }
 minifb = "0.28"
 cpal = "0.18"
+
+# A cycle-accurate emulator is hot code: an unoptimized (debug) build of the
+# core runs the web frontend at single-digit fps and pins the CPU. `trunk serve`
+# builds the *dev* profile, so optimize the core there too — the frontend then
+# runs at full speed without needing a `--release` build, while the glue crates
+# stay at low opt for fast incremental compiles. This also speeds up the ROM
+# test suite, which runs under the dev profile via `cargo test`.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package.rgametoy-core]
+opt-level = 3
+
+# Shipped bundle (`trunk build --release`): squeeze throughput and size.
+[profile.release]
+lto = true
+codegen-units = 1
