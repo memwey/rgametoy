@@ -21,3 +21,9 @@ impl Wram {
         self.data[(addr & 0x1FFF) as usize] = value;
     }
 }
+
+impl Default for Wram {
+    fn default() -> Self {
+        Self::new()
+    }
+}

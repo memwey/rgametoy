@@ -12,7 +12,7 @@ const SELECT_DIRECTIONS: u8 = 0x20; // P14=0, P15=1
 const SELECT_ACTIONS: u8 = 0x10; // P15=0, P14=1
 
 fn press(bits: u8) -> u8 {
-    0xFF & !bits
+    !bits
 }
 
 /// Whether the Joypad interrupt (IF bit 4) is currently requested.

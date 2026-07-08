@@ -59,3 +59,9 @@ impl P1 {
         before & !self.lines() != 0
     }
 }
+
+impl Default for P1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}

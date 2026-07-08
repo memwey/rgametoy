@@ -21,3 +21,9 @@ impl Hram {
         self.data[(addr - 0xFF80) as usize] = value;
     }
 }
+
+impl Default for Hram {
+    fn default() -> Self {
+        Self::new()
+    }
+}

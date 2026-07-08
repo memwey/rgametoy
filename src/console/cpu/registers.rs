@@ -180,3 +180,9 @@ impl Registers {
         self.hl = (self.hl & 0xFF00) | (value as u16);
     }
 }
+
+impl Default for Registers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
