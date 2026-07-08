@@ -68,3 +68,32 @@ fn blargg_cpu_and_timing_pass() {
         assert!(out.contains("Passed"), "{sub}: got {out:?}");
     }
 }
+
+/// Blargg's `dmg_sound` APU suite (reports via the `$A000` memory protocol, not
+/// serial). We pass 5/12 — the fundamentals (registers, basic length, sweep,
+/// overflow-on-trigger, len/sweep sync). The other 7 are the obscure APU
+/// hardware corners (wave-RAM access while the channel is on; length-counter
+/// clocking on enable / during power; sweep negate-mode disable; NR41 after
+/// power) — see docs/testing.md §3.9. Ratchet the passing set so it can't
+/// regress; the failing set is documented, not asserted.
+#[test]
+fn blargg_dmg_sound_known_passing() {
+    let root = roms_root!();
+    let dir = root.join("blargg").join("dmg_sound").join("rom_singles");
+    let passing = [
+        "01-registers",
+        "02-len ctr",
+        "04-sweep",
+        "06-overflow on trigger",
+        "07-len sweep period sync",
+    ];
+    let mut regressed = Vec::new();
+    for name in passing {
+        let rom = dir.join(format!("{name}.gb"));
+        let bytes = std::fs::read(&rom).unwrap_or_else(|_| panic!("missing {rom:?}"));
+        if blargg_ram_status(&bytes) != 0x00 {
+            regressed.push(name);
+        }
+    }
+    assert!(regressed.is_empty(), "dmg_sound regressions: {regressed:?}");
+}

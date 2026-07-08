@@ -99,6 +99,26 @@ pub fn blargg_serial(rom: &[u8]) -> String {
     out
 }
 
+/// Run a Blargg ROM that reports via the `$A000` result protocol — signature
+/// `DE B0 61` at `$A001-3`, status at `$A000` (0x80 = running, 0x00 = passed,
+/// anything else = failed subtest number). The `dmg_sound` suite uses this
+/// instead of serial. Returns the final status byte.
+pub fn blargg_ram_status(rom: &[u8]) -> u8 {
+    let mut c = boot(rom);
+    let mut status = 0x80u8;
+    for _ in 0..8000 {
+        c.run_frame();
+        let sig = [c.read_mem(0xA001), c.read_mem(0xA002), c.read_mem(0xA003)];
+        if sig == [0xDE, 0xB0, 0x61] {
+            status = c.read_mem(0xA000);
+            if status != 0x80 {
+                break;
+            }
+        }
+    }
+    status
+}
+
 /// Recursively collect `*.gb` files under `dir`.
 pub fn find_roms(dir: &std::path::Path) -> Vec<PathBuf> {
     let mut out = Vec::new();

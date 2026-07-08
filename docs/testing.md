@@ -69,7 +69,8 @@ project uses v7.0). Each ROM signals "pass" differently:
 
 | Suite | How it's judged | Entry point |
 |---|---|---|
-| **Blargg** | prints the result ("Passed"/"Failed") over the **serial** port, captured and compared | `rom_suite` / `examples/run_serial.rs` |
+| **Blargg** (cpu/timing) | prints the result ("Passed"/"Failed") over the **serial** port, captured and compared | `rom_suite` / `examples/run_serial.rs` |
+| **Blargg `dmg_sound`** (APU) | writes a status byte to **`$A000`** (signature `DE B0 61`; 0x00 = passed) — not serial | `rom_suite` (`blargg_ram_status`) |
 | **mooneye** | on success loads the Fibonacci signature `3,5,8,13,21,34` into `B,C,D,E,H,L`; anything else is failure | `rom_suite` / `examples/run_mooneye.rs` |
 | **dmg-acid2** | renders a reference image, compared **pixel by pixel** | `examples/screenshot.rs` (to BMP) / `dump_fb.rs` |
 | **mealybug** | one specific frame compared **pixel by pixel** to the reference PNG (`*_dmg_blob.png`) | `tools/mealybug_compare.py` |
@@ -82,10 +83,11 @@ leave it unset to skip the whole thing (default `cargo test` is unaffected):
 GB_TEST_ROMS=/path/to/game-boy-test-roms cargo test --release -p rgametoy-core --test rom_suite
 ```
 
-Two assertions: mooneye acceptance **all non-boot pass** (walks the tree, skips
-`boot*`) and Blargg cpu/timing report "Passed" over serial. These self-certify via
-register signature / serial output, so they **need no reference data** and are a
-good fit for a committed automated test.
+Three assertions: mooneye acceptance **all non-boot pass** (walks the tree, skips
+`boot*`), Blargg cpu/timing report "Passed" over serial, and Blargg `dmg_sound`'s
+**5 passing subtests stay passing** (ratchet — the other 7 are documented in §2.5,
+not asserted). These self-certify via register signature / serial / `$A000`, so
+they **need no reference data** and are a good fit for a committed automated test.
 
 **mealybug is a local scaffold, not an automated test**: it is a **per-pixel
 similarity** metric (not pass/fail), and each test needs a reference image — which
@@ -185,6 +187,35 @@ Fixed the **WX<7 window left-clip** (§3.6), pushing `m3_wx_4_change` 56→99,
 **independent dot-precise timing puzzle** (characterized one by one in §3.6);
 mealybug is the strictest suite, and many mature emulators sit at single-digit
 PASS counts for a long time.
+
+### 2.5 Blargg `dmg_sound` (APU) — 5 / 12 pass
+
+The APU suite reports via the **`$A000` memory protocol** (signature `DE B0 61`
+at `$A001-3`, status at `$A000`), not serial — `common::blargg_ram_status`. The
+`rom_suite` test `blargg_dmg_sound_known_passing` ratchets the passing set so it
+can't regress.
+
+| Subtest | Result |
+|---|---|
+| 01-registers | ✅ |
+| 02-len ctr | ✅ |
+| 04-sweep | ✅ |
+| 06-overflow on trigger | ✅ |
+| 07-len sweep period sync | ✅ |
+| 03-trigger | ❌ enabling in first half of a length period should clock length |
+| 05-sweep details | ❌ exiting negate mode after calculation disables the channel |
+| 08-len ctr during power | ❌ length-counter clocking across a power-off |
+| 11-regs after power | ❌ powering off shouldn't affect NR41 |
+| 09-wave read while on | ❌ wave-RAM read while the channel is playing |
+| 10-wave trigger while on | ❌ wave-RAM state on trigger while on |
+| 12-wave write while on | ❌ wave-RAM write while the channel is playing |
+
+The fundamentals (register map, DAC, basic length/sweep/envelope, overflow) are
+right. The 7 failures are the classic obscure APU corners (§3.9): the wave
+channel's sample-buffer access conflicts while it's on (09/10/12), and the
+length-counter clock-on-enable / power edge cases (03/08/11) plus the sweep
+negate-mode disable (05). The APU is **not** cycle-validated to the degree the
+CPU/PPU/timer are — this is the first pass at scoring it.
 
 ---
 
@@ -373,6 +404,27 @@ not to repeat them:
 `boot_regs`/`boot_div`/`boot_hwio`'s `dmg0/mgb/sgb/sgb2` variants and `boot_sclk_align`
 check specific models' post-boot state; we only do DMG and don't run a real boot ROM.
 The real DMG variants (`*-dmgABC`) pass.
+
+### 3.9 APU obscure corners (`dmg_sound` 5/12, not yet attacked)
+
+The APU passes the fundamentals but fails 7 hardware edge cases (§2.5). Not yet
+worked on — characterized here for when it is. Two clusters:
+
+- **Wave-channel access while on (09/10/12)**: on real hardware, while CH3 is
+  playing you can't freely read/write wave RAM — access is constrained to the
+  byte the channel is currently reading, and mistimed access corrupts/returns it
+  in a specific way. Our wave channel exposes the RAM as a plain array regardless
+  of play state. This is the hardest cluster (needs the channel's sample-position
+  → RAM-byte mapping and the DMG access-conflict rule).
+- **Length-counter / power / sweep edges (03/08/11/05)**: the length counter has
+  a quirk where enabling it in the first half of a length period clocks it an
+  extra step (03); its behaviour across a power-off (08) and NR41's survival of
+  power (11) are specific; and leaving sweep negate mode after at least one
+  calculation disables the channel (05). Each is a small, local rule in the
+  frame-sequencer / trigger paths.
+
+These need M-cycle (or finer) alignment of the frame sequencer and wave unit; the
+`blargg_dmg_sound_known_passing` ratchet guards the 5 that pass while this is open.
 
 ### M-cycle ↔ sub-cycle spectrum
 

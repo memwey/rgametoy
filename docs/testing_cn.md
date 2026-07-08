@@ -58,7 +58,8 @@ release bundle(本项目用 v7.0)获取。每种 ROM 的"通过信号"不同:
 
 | 套件 | 判定方式 | 入口 |
 |---|---|---|
-| **Blargg** | 把结果("Passed"/"Failed")打到**串口**,截获比对 | `rom_suite` / `examples/run_serial.rs` |
+| **Blargg**(cpu/timing) | 把结果("Passed"/"Failed")打到**串口**,截获比对 | `rom_suite` / `examples/run_serial.rs` |
+| **Blargg `dmg_sound`**(APU) | 把状态字节写到 **`$A000`**(签名 `DE B0 61`;0x00 = 通过)——不走串口 | `rom_suite`(`blargg_ram_status`) |
 | **mooneye** | 成功时把斐波那契签名 `3,5,8,13,21,34` 载入 `B,C,D,E,H,L`,失败为其它值 | `rom_suite` / `examples/run_mooneye.rs` |
 | **dmg-acid2** | 渲染一张参考图,**逐像素**比对 | `examples/screenshot.rs`(转 BMP)/ `dump_fb.rs` |
 | **mealybug** | 某一特定帧的画面与参考 PNG(`*_dmg_blob.png`)**逐像素**比对 | `tools/mealybug_compare.py` |
@@ -70,8 +71,9 @@ release bundle(本项目用 v7.0)获取。每种 ROM 的"通过信号"不同:
 GB_TEST_ROMS=/path/to/game-boy-test-roms cargo test --release -p rgametoy-core --test rom_suite
 ```
 
-两个断言:mooneye acceptance **非 boot 全过**(遍历,跳过 `boot*`)、Blargg cpu/timing 串口
-"Passed"。这两类靠寄存器签名/串口自证,**不需要参考数据**,所以适合入库自动跑。
+三个断言:mooneye acceptance **非 boot 全过**(遍历,跳过 `boot*`)、Blargg cpu/timing 串口
+"Passed"、以及 Blargg `dmg_sound` 的**5 项通过子测试保持通过**(ratchet——其余 7 项在 §2.5
+记录、不做断言)。这些靠寄存器签名/串口/`$A000` 自证,**不需要参考数据**,适合入库自动跑。
 
 **mealybug 用本地脚手架而非自动测试**:它是**逐像素相似度**(非 pass/fail),每个测试要一张
 参考图——而参考图(`<name>_dmg_blob.png`)本就和 ROM 同目录躺在 bundle 里,再入库一份纯属
@@ -158,6 +160,32 @@ GB_TEST_ROMS=/path/to/game-boy-test-roms tools/mealybug_compare.py [name-substr]
 已修 **WX<7 窗口左裁**(§3.6),把 `m3_wx_4_change` 56→99、`m3_wx_5_change` 59→97、
 `m3_window_timing_wx_0` 96→99 顶上去。其余每个都是**独立的逐 dot 时序谜题**(逐一定性见 §3.6),
 mealybug 是最严一档,多数成熟模拟器也长期停在个位数 PASS。
+
+### 2.5 Blargg `dmg_sound`(APU)—— 5 / 12 通过
+
+APU 套件通过 **`$A000` 内存协议**报结果(签名 `DE B0 61` 于 `$A001-3`,状态在 `$A000`),
+不走串口——`common::blargg_ram_status`。`rom_suite` 里的 `blargg_dmg_sound_known_passing`
+把通过的这几项 ratchet 住,防回归。
+
+| 子测试 | 结果 |
+|---|---|
+| 01-registers | ✅ |
+| 02-len ctr | ✅ |
+| 04-sweep | ✅ |
+| 06-overflow on trigger | ✅ |
+| 07-len sweep period sync | ✅ |
+| 03-trigger | ❌ 在长度周期前半段使能应额外 clock 一次 length |
+| 05-sweep details | ❌ 计算后退出 negate 模式会禁用声道 |
+| 08-len ctr during power | ❌ 掉电前后的 length counter 时序 |
+| 11-regs after power | ❌ 掉电不应影响 NR41 |
+| 09-wave read while on | ❌ 声道播放中读 wave RAM |
+| 10-wave trigger while on | ❌ 播放中 trigger 时的 wave RAM 状态 |
+| 12-wave write while on | ❌ 声道播放中写 wave RAM |
+
+基础功能(寄存器映射、DAC、基本 length/sweep/envelope、overflow)是对的。7 个失败都是经典的
+APU 边角(§3.9):波形声道播放中的 RAM 访问冲突(09/10/12),以及 length counter 使能/掉电边界
+(03/08/11)加 sweep negate 禁用(05)。APU **没有**像 CPU/PPU/timer 那样被 cycle 级验证过——
+这是第一次给它打分。
 
 ---
 
@@ -286,6 +314,21 @@ STAT 中断(赶在下一条 `DI` 之前)。
 ### 3.8 Boot 状态(不在目标范围)
 `boot_regs`/`boot_div`/`boot_hwio` 的 `dmg0/mgb/sgb/sgb2` 变体、`boot_sclk_align` 校验特定机型
 开机态;我们只做 DMG 且不跑真实 boot ROM。真正的 DMG 变体(`*-dmgABC`)已过。
+
+### 3.9 APU 边角(`dmg_sound` 5/12,尚未攻坚)
+
+APU 基础都对,但 7 个硬件边角没过(§2.5)。还没动手——先在这定性,以后攻坚用。两簇:
+
+- **波形声道播放中的访问(09/10/12)**:真机上 CH3 播放时不能随意读/写 wave RAM——访问被限制到
+  声道当前正在读的那个字节,时序不对会以特定方式损坏/返回它。我们的波形声道无视播放状态,把 RAM
+  当普通数组暴露。这是最难的一簇(要建声道采样位置 → RAM 字节的映射,以及 DMG 的访问冲突规则)。
+- **length counter / 掉电 / sweep 边界(03/08/11/05)**:length counter 有个 quirk——在长度周期
+  前半段使能会多 clock 一步(03);它跨掉电的行为(08)、NR41 掉电后是否保留(11)各有讲究;
+  以及"至少算过一次后离开 sweep negate 模式会禁用声道"(05)。每个都是 frame sequencer / trigger
+  路径里一条小而局部的规则。
+
+这些需要把 frame sequencer 和波形单元对齐到 M-cycle(或更细);`blargg_dmg_sound_known_passing`
+这条 ratchet 在攻坚期间守住已过的 5 项。
 
 ### M-cycle 级 ↔ 亚周期级 光谱
 
