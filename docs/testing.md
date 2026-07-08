@@ -110,13 +110,22 @@ root 组仅剩 11 个失败,**全是 Boot 状态**:`boot_regs-{dmg0,mgb,sgb,sgb2
 以及控制流**读**时序整簇 `call/call_cc/jp/jp_cc/ret/ret_cc/reti/add_sp_e/ld_hl_sp_e _timing`
 (见 §3.1)。
 
-### 2.4 mealybug tearoom(DMG)—— 0 / 24
+### 2.4 mealybug tearoom(DMG)—— 1 / 24 通过,逐像素相似度已量化
 
-全挂,但命中率说明问题:多数在 **90–99%**(如 `m3_lcdc_obj_en_change` 99%、
-`m3_obp0_change` 98%、`m2_win_en_toggle` 99%)——像素 FIFO 把每个行内特效的**结构**
-渲染对了,只是没精确到"具体哪个 dot";少数偏差大(`m3_wx_4_change` 34%、
-`m3_scy_change` 43%),指向具体的窗口/滚动锁存边界。mealybug 是最严的 PPU 时序测试,
-0/24 对不少成熟模拟器也是常态。
+用纯 stdlib(zlib)写了个 PNG 比对器 `scratchpad/pngcmp.py`(参考图是 grayscale
+bd=1/2,`3 - g` 极性),对全 24 个逐像素打分 + 定位差异行列。**PASS 需 100%**。
+
+| 相似度 | 测试 |
+|---|---|
+| **100%** ✅ | `m2_win_en_toggle` |
+| 99%+ | `m3_wx_4_change_sprites`(99.96)、`m3_scx_high_5_bits`(99.64)、`m3_lcdc_obj_en_change`(99.37)、`m3_lcdc_obj_size_change_scx`(99.18)、`m3_wx_4_change`(99.01) |
+| 95–99% | `m3_window_timing_wx_0`、`m3_obp0_change`、`m3_lcdc_obj_size_change`、`m3_scx_low_3_bits`、`m3_wx_5_change`、`m3_lcdc_bg_map_change`、`m3_lcdc_obj_en_change_variant` |
+| 88–94% | `m3_lcdc_win_map_change`、`m3_window_timing`、`m3_lcdc_tile_sel_win_change`、`m3_lcdc_tile_sel_change`、`m3_lcdc_bg_en_change` |
+| < 80% | `m3_bgp_change`(78)、`m3_bgp_change_sprites`(75)、`m3_lcdc_win_en_change_multiple_wx`(74)、`m3_lcdc_win_en_change_multiple`(64)、`m3_scy_change`(58)、`m3_wx_6_change`(40) |
+
+本轮修好 **WX<7 窗口左裁**(§3.8),把 `m3_wx_4_change` 56→99、`m3_wx_5_change` 59→97、
+`m3_window_timing_wx_0` 96→99 顶上去。剩下每个都是**独立的逐 dot 时序谜题**(已逐一定性,
+见 §3.8),mealybug 是最严一档,多数成熟模拟器也长期停在个位数 PASS。
 
 ---
 
@@ -202,6 +211,29 @@ aggregation + bubble-free fetcher push`)。它的 ~100 个 testcase 各编码
 之前"测量行 LY=68 无精灵"的结论是**误读**:精灵 Y=$52 覆盖屏幕行 66..73,line 68 在内;
 测量行 68 正是测试设计(等 LY=66 → mode0 → mode3(line 67)→ HALT → line 68 的 mode-2 中断)。
 `ppu_probe` 12 种配置(单个/叠加/散开)全部逐 dot 命中硬件表。
+
+### 3.8 mealybug tearoom —— 已修 WX<7 裁剪;其余逐一定性
+建了 `pngcmp.py`(纯 stdlib PNG 解码 + 逐像素比对 + 差异行列定位),把"0/24 凭感觉"
+换成**逐测试相似度 + 差异结构**(见 §2.4)。
+
+**已修**(commit `fix(ppu): clip the window's left edge when WX < 7`):`m3_wx_5_change`
+的行样显示我们的输出正是参考**右移 (7−WX) 像素**。真机 WX<7 时窗口左边 (7−WX) 像素落屏外
+被裁,我们没裁 → 整窗右移。复用 SCX fine-scroll 的 discard 机制,窗口激活时置
+`discard = 7 - WX`。`m3_wx_4` 56→99、`m3_wx_5` 59→97(逐像素对齐)、`m3_window_timing_wx_0`
+96→99;acid2 字节不变、mooneye ppu 全绿、`m2_win_en_toggle` 保持 100%。
+
+**剩余的定性**(每个都是独立逐-dot 时序,非"改几行",且碰渲染有回归风险):
+- **调色板写延迟 + 瞬态**(`m3_bgp_change` 78 / `_sprites` 75):用 mode-2 STAT 中断触发,
+  按 nop 延迟连写 BGP 扫描整行。我们的转变比参考**晚 ~7px**,且参考在写落地那拍有**孤立
+  的中间色像素**(DMG 著名的 BGP 写-推同拍毛刺)我们不建模。注意 OBJ 版 `m3_obp0_change`
+  已 98%,BG/OBJ 路径的这点差异是硬件特性。该 78% **非本轮回归**(改动前同分)。
+- **窗口触发的精确 dot**(`m3_wx_6_change` 40 / `win_en_multiple` 64):某些行参考显示背景、
+  我们显示窗口——WX 在触发比较那一拍被改写时应**抑制**触发,缺该逐-dot 比较时机。
+- **coarse-scroll 采样点**(`m3_scx_high_5_bits` 99.64,单个 tile 列 x16-23):SCX 高位中途改,
+  差一个 tile 的取数时机。
+- **精灵-窗口边缘 1 像素**(`m3_wx_4_change_sprites` 99.96,仅 10 px):WX=4 窗口边缘透出的
+  单个精灵像素被我们丢弃。
+- **SCY 中途改**(`m3_scy_change` 58):行内改 SCY 影响取哪一 tile 行,大面积偏。
 
 ### 3.4 实验教训(已回退)
 几次朝 T-cycle 精度的尝试被棘轮挡回,记录以免重蹈:
