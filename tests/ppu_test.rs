@@ -1,59 +1,8 @@
 extern crate rgametoy;
 
+mod common;
+use common::{enabled_ppu, mode3_len_on_line2, mode3_len_with_sprites, render_frame};
 use rgametoy::console::ppu::{Ppu, PpuMode};
-
-/// Enable the LCD (LCDC bit 7) so the PPU state machine runs.
-fn enabled_ppu() -> Ppu {
-    let mut ppu = Ppu::new();
-    ppu.write_register(0xFF40, 0x80);
-    ppu
-}
-
-/// Measure the length of mode 3 on line 2 (a normal line — line 0 after enable
-/// is special), by watching the OAM-scan→drawing and drawing→HBlank edges.
-fn mode3_len_on_line2(ppu: &mut Ppu) -> u32 {
-    while ppu.ly != 2 {
-        ppu.tick(1);
-    }
-    let (mut start, mut dot, mut len) = (0u32, 0u32, 0u32);
-    while ppu.ly == 2 {
-        let mode = ppu.get_mode();
-        ppu.tick(1);
-        dot += 1;
-        if mode == PpuMode::OamScan && ppu.get_mode() == PpuMode::Drawing {
-            start = dot;
-        }
-        if mode == PpuMode::Drawing && ppu.get_mode() == PpuMode::HBlank {
-            len = dot - start;
-        }
-    }
-    len
-}
-
-/// Mode-3 length on line 2 with the given sprite OAM X positions (all at Y=18,
-/// i.e. screen line 2), sprites enabled.
-fn mode3_len_with_sprites(sprite_xs: &[u8]) -> u32 {
-    let mut ppu = Ppu::new();
-    for (i, &x) in sprite_xs.iter().enumerate() {
-        let base = 0xFE00 + i as u16 * 4;
-        ppu.write_oam(base, 18); // Y=18 -> screen line 2
-        ppu.write_oam(base + 1, x);
-        ppu.write_oam(base + 2, 0);
-        ppu.write_oam(base + 3, 0);
-    }
-    ppu.write_register(0xFF40, if sprite_xs.is_empty() { 0x91 } else { 0x93 });
-    mode3_len_on_line2(&mut ppu)
-}
-
-/// Render one full frame (drive line by line until frame-ready).
-fn render_frame(ppu: &mut Ppu) {
-    for _ in 0..2000 {
-        ppu.tick(200);
-        if ppu.take_frame_ready() {
-            break;
-        }
-    }
-}
 
 /// #2 regression: `tick` advances one PPU dot per T-cycle (no ×4). OAM scan
 /// (mode 2) lasts exactly 80 dots.

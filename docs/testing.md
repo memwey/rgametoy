@@ -48,6 +48,22 @@ cargo run --release --example dump_fb     -- rom.gb out.raw [帧数]  # dump 160
 cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲染一帧
 ```
 
+**入库的 ROM 集成测试(`tests/rom_suite.rs`)**:上面的 example 是手动 CLI;`rom_suite`
+把整条黑盒层做成 `cargo test`——设了 `GB_TEST_ROMS` 指向 game-boy-test-roms bundle 根就跑,
+没设就整体 skip(默认 `cargo test` 不受影响):
+
+```sh
+GB_TEST_ROMS=/path/to/game-boy-test-roms cargo test --release --test rom_suite
+```
+
+三个断言:mooneye acceptance **非 boot 全过**(遍历,跳过 `boot*`)、Blargg cpu/timing 串口
+"Passed"、mealybug **逐测试不回归**(见下)。ROM 体积大 + 版权,**不入库**;但 mealybug 的
+参考图**入库了**——`tests/fixtures/mealybug/*.bin` 是把每张 `*_dmg_blob.png` 预解码成
+shade(`3 - gray`)再打包 2bpp(每张 5760 字节),`include_bytes!` 进测试二进制。这样对比只是
+一次字节比较、**不需要 PNG 解码器**(Rust std 无 inflate),且把当前逐像素匹配数钉成回归下限
+(棘轮):任何 PPU 改动让某测试相似度下降就红。共享脚手架在 `tests/common/mod.rs`(灰盒 PPU
+helper + 黑盒 ROM runner)。
+
 **调试器(`--features debug`)**:标定硬件测试用的项目内检查器(见 `src/console/debug.rs`),
 `Console::snapshot()` 一次性拿到整机可观测状态(含寄存器看不到的 PPU 内部 mode/dot、STAT 线、
 LY==LYC 锁存),`run_until` 打断点。`examples/inspect.rs` 是它的 CLI:
