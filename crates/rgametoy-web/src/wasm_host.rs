@@ -18,8 +18,9 @@ use web_sys::{
 };
 
 use crate::audio::AudioPlayer;
-use crate::canvas::{get_canvas, get_element_by_id, present, RGBA_LEN};
+use crate::canvas::{get_canvas, get_element_by_id, Presenter, RGBA_LEN};
 use crate::input::{from_keydown, InputState};
+use crate::pacing::{frames_to_run, DMG_FRAME_MS, MAX_CATCHUP_MS};
 use crate::palette::{rgba_table, shade_to_rgba, PALETTES};
 use crate::rom::{cartridge_title, load_rom};
 use crate::storage::{rom_hash, SaveRecord};
@@ -35,34 +36,6 @@ const TURBO_FRAMES_PER_TICK: u32 = 4;
 /// is 2 s at 60 Hz — slow enough not to thrash the disk, fast enough that
 /// a tab crash loses at most ~2 s of progress.
 const AUTOSAVE_DEBOUNCE: u64 = 120;
-
-/// One DMG frame in milliseconds (4.194304 MHz / 70224 dots ≈ 59.7275 Hz).
-/// The rAF loop paces emulation against this, not the display refresh, so a
-/// 120 Hz panel doesn't run the game 2×.
-const DMG_FRAME_MS: f64 = 70224.0 / 4_194_304.0 * 1000.0;
-
-/// Cap on the real time a single tick may consume, so a long stall (e.g. a
-/// backgrounded tab) is absorbed instead of triggering a catch-up avalanche.
-const MAX_CATCHUP_MS: f64 = 100.0;
-
-/// Hard cap on emulated frames run per rAF tick (belt-and-braces with the
-/// catch-up clamp above).
-const MAX_FRAMES_PER_TICK: u32 = 4;
-
-/// Real-time frame pacing (pure, so it's unit-tested): given the accumulator and
-/// this tick's already-clamped elapsed real time `dt_ms`, return how many
-/// ~59.7 Hz emulated frames to run and the leftover accumulator. Capped at
-/// [`MAX_FRAMES_PER_TICK`]. This is what keeps a 120 Hz display from running the
-/// game 2× — it runs frames per *real time*, not per refresh.
-fn frames_to_run(accum_ms: f64, dt_ms: f64) -> (u32, f64) {
-    let mut accum = accum_ms + dt_ms;
-    let mut n = 0;
-    while accum >= DMG_FRAME_MS && n < MAX_FRAMES_PER_TICK {
-        accum -= DMG_FRAME_MS;
-        n += 1;
-    }
-    (n, accum)
-}
 
 /// Register a page-lifetime event listener whose handler receives the event,
 /// leaking the closure so it stays valid for the document's lifetime. Every
@@ -107,6 +80,8 @@ pub struct Inner {
     #[allow(dead_code)]
     pub canvas: HtmlCanvasElement,
     pub ctx: CanvasRenderingContext2d,
+    /// Reusable blitter (persistent ImageData) that pushes `rgba_buf` to `ctx`.
+    pub presenter: Presenter,
     pub palette_idx: usize,
     pub rgba_buf: Vec<u8>,
     pub paused: bool,
@@ -175,10 +150,12 @@ impl Inner {
             .document()
             .ok_or_else(|| JsValue::from_str("no document"))?;
         let (canvas, ctx) = get_canvas(&doc)?;
+        let presenter = Presenter::new()?;
         Ok(Inner {
             console: Console::new(),
             canvas,
             ctx,
+            presenter,
             palette_idx: 0,
             rgba_buf: vec![0; RGBA_LEN],
             paused: false,
@@ -467,7 +444,7 @@ impl Inner {
         let fb = self.console.framebuffer();
         let table = rgba_table(self.palette_idx);
         shade_to_rgba(fb, table, &mut self.rgba_buf);
-        let _ = present(&self.ctx, &self.rgba_buf);
+        let _ = self.presenter.blit(&self.ctx, &self.rgba_buf);
 
         // Debounced auto-save: on the interval, flush battery RAM to IDB *only
         // when the game has actually written to it* since the last flush — an
@@ -880,55 +857,5 @@ impl WasmHost {
             }
         })?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{frames_to_run, DMG_FRAME_MS, MAX_FRAMES_PER_TICK};
-
-    #[test]
-    fn one_dmg_frame_of_elapsed_runs_one_frame() {
-        let (n, accum) = frames_to_run(0.0, DMG_FRAME_MS);
-        assert_eq!(n, 1);
-        assert!(accum.abs() < 1e-9, "no leftover, got {accum}");
-    }
-
-    #[test]
-    fn a_short_tick_runs_nothing_but_accumulates() {
-        // A 60 Hz tick (16.667 ms) is just under one DMG frame (16.743 ms), so
-        // it runs 0 frames and carries the remainder — the next tick runs 1.
-        let (n, accum) = frames_to_run(0.0, 1000.0 / 60.0);
-        assert_eq!(n, 0);
-        assert!(accum > 16.0, "carried the elapsed time, got {accum}");
-    }
-
-    #[test]
-    fn catch_up_is_capped() {
-        // 10 frames' worth of elapsed time in one tick is clamped to the cap.
-        let (n, _) = frames_to_run(0.0, DMG_FRAME_MS * 10.0);
-        assert_eq!(n, MAX_FRAMES_PER_TICK);
-    }
-
-    /// The regression that motivated the accumulator: emulation must run at the
-    /// DMG's ~59.7 Hz for *one real second* regardless of the display refresh —
-    /// a fixed one-frame-per-rAF ran the game 2× on a 120 Hz panel.
-    #[test]
-    fn paces_to_dmg_rate_regardless_of_refresh() {
-        for hz in [60.0_f64, 120.0, 144.0] {
-            let dt = 1000.0 / hz;
-            let mut accum = 0.0;
-            let mut total = 0u32;
-            for _ in 0..(hz as u32) {
-                // one real second of ticks
-                let (n, a) = frames_to_run(accum, dt);
-                total += n;
-                accum = a;
-            }
-            assert!(
-                (total as i32 - 60).abs() <= 1,
-                "{hz} Hz ran {total} frames/s (expected ~59.7, not ~{hz})"
-            );
-        }
     }
 }

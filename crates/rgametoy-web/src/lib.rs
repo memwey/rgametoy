@@ -9,7 +9,9 @@ use wasm_bindgen::prelude::*;
 mod audio;
 mod canvas;
 mod input;
+mod pacing;
 mod palette;
+mod resample;
 mod rom;
 mod screenshot;
 mod storage;
@@ -22,7 +24,7 @@ mod weblog;
 /// it, so it's dead-code-eliminated from the cdylib.
 #[doc(hidden)]
 pub mod test_support {
-    pub use crate::canvas::{present, SCREEN_H, SCREEN_W};
+    pub use crate::canvas::{Presenter, SCREEN_H, SCREEN_W};
     pub use crate::storage::{js_to_record, record_to_js, SaveRecord};
 }
 

@@ -19,7 +19,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use rgametoy_web::test_support::{
-    js_to_record, present, record_to_js, SaveRecord, SCREEN_H, SCREEN_W,
+    js_to_record, record_to_js, Presenter, SaveRecord, SCREEN_H, SCREEN_W,
 };
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
@@ -70,10 +70,12 @@ fn a_record_without_hash_is_rejected() {
     assert!(js_to_record(&JsValue::from(obj)).is_err());
 }
 
-/// `present` must actually push pixels to the 2D context: blit a solid buffer
-/// and read the top-left pixel back out of the canvas.
+/// `Presenter::blit` must actually push pixels to the 2D context via its
+/// persistent ImageData: blit a solid buffer and read the top-left pixel back.
+/// This also exercises the load-bearing assumption behind the reuse — that the
+/// `ImageData`'s store *is* the shared array we copy into each frame.
 #[wasm_bindgen_test]
-fn present_blits_rgba_to_a_canvas() {
+fn presenter_blits_rgba_to_a_canvas() {
     let doc = web_sys::window().unwrap().document().unwrap();
     let canvas: web_sys::HtmlCanvasElement =
         doc.create_element("canvas").unwrap().dyn_into().unwrap();
@@ -82,12 +84,22 @@ fn present_blits_rgba_to_a_canvas() {
     let ctx: web_sys::CanvasRenderingContext2d =
         canvas.get_context("2d").unwrap().unwrap().dyn_into().unwrap();
 
+    let presenter = Presenter::new().unwrap();
     let mut buf = vec![0u8; (SCREEN_W * SCREEN_H * 4) as usize];
     for px in buf.chunks_exact_mut(4) {
         px.copy_from_slice(&[200, 30, 40, 255]); // opaque red
     }
-    present(&ctx, &buf).unwrap();
+    presenter.blit(&ctx, &buf).unwrap();
 
     let data = ctx.get_image_data(0.0, 0.0, 1.0, 1.0).unwrap().data();
     assert_eq!(&data[0..4], &[200, 30, 40, 255]);
+
+    // Blit a second, different frame through the *same* Presenter — proves the
+    // reused ImageData reflects the new bytes, not the first frame's.
+    for px in buf.chunks_exact_mut(4) {
+        px.copy_from_slice(&[10, 20, 30, 255]);
+    }
+    presenter.blit(&ctx, &buf).unwrap();
+    let data = ctx.get_image_data(0.0, 0.0, 1.0, 1.0).unwrap().data();
+    assert_eq!(&data[0..4], &[10, 20, 30, 255]);
 }

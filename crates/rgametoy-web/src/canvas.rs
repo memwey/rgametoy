@@ -3,7 +3,8 @@
 //! `putImageData`. The browser handles the integer-scale CSS upscaling via
 //! `image-rendering: pixelated` in `style/main.css`.
 
-use wasm_bindgen::{Clamped, JsCast, JsValue};
+use js_sys::Uint8ClampedArray;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{CanvasRenderingContext2d, Document, HtmlCanvasElement, ImageData};
 
 pub const SCREEN_W: u32 = 160;
@@ -32,12 +33,27 @@ pub fn get_canvas(doc: &Document) -> Result<(HtmlCanvasElement, CanvasRenderingC
     Ok((canvas, ctx))
 }
 
-/// Push the contents of `rgba_buf` (a `SCREEN_W * SCREEN_H * 4` RGBA buffer)
-/// to the canvas. The ImageData is created fresh each frame; the ~90 KB
-/// allocation is small enough that pool-reuse would be premature optimisation.
-pub fn present(ctx: &CanvasRenderingContext2d, rgba_buf: &[u8]) -> Result<(), JsValue> {
-    let clamped = Clamped(rgba_buf);
-    let image = ImageData::new_with_u8_clamped_array(clamped, SCREEN_W)?;
-    ctx.put_image_data(&image, 0.0, 0.0)?;
-    Ok(())
+/// Reusable canvas blitter. Both the `ImageData` and its backing
+/// `Uint8ClampedArray` are allocated once, up front. Per the `ImageData(data,…)`
+/// constructor the `image`'s pixel store *is* `array` (same object, not a copy),
+/// so each frame we copy the framebuffer into `array` and `putImageData` reads
+/// it straight back — no fresh ~90 KB `ImageData` allocated (and GC'd) every
+/// frame, which is what the old per-frame `present` did 60×/s.
+pub struct Presenter {
+    array: Uint8ClampedArray,
+    image: ImageData,
+}
+
+impl Presenter {
+    pub fn new() -> Result<Presenter, JsValue> {
+        let array = Uint8ClampedArray::new_with_length(RGBA_LEN as u32);
+        let image = ImageData::new_with_js_u8_clamped_array_and_sh(&array, SCREEN_W, SCREEN_H)?;
+        Ok(Presenter { array, image })
+    }
+
+    /// Push `rgba_buf` (a `SCREEN_W * SCREEN_H * 4` RGBA buffer) to the canvas.
+    pub fn blit(&self, ctx: &CanvasRenderingContext2d, rgba_buf: &[u8]) -> Result<(), JsValue> {
+        self.array.copy_from(rgba_buf);
+        ctx.put_image_data(&self.image, 0.0, 0.0)
+    }
 }
