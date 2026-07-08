@@ -113,6 +113,32 @@ impl Envelope {
     }
 }
 
+/// The NRx4 length-enable write plus the "extra length clock" obscure behaviour
+/// (dmg_sound tests 03/08/11): if a write *enables* the length counter (bit 6,
+/// 0→1) while the frame sequencer is in the first half of the length period —
+/// i.e. the next FS step will *not* clock length — the length counter is clocked
+/// once immediately, and if it reaches 0 (and this isn't a trigger) the channel
+/// is disabled. Shared by all four channels; the caller does the trigger (and,
+/// for a length reloaded to max on trigger, one more immediate clock).
+fn length_enable_write(
+    length_counter: &mut u16,
+    length_enabled: &mut bool,
+    enabled: &mut bool,
+    value: u8,
+    first_half: bool,
+) {
+    let trigger = value & 0x80 != 0;
+    let enable = value & 0x40 != 0;
+    let was_enabled = *length_enabled;
+    *length_enabled = enable;
+    if enable && !was_enabled && first_half && *length_counter > 0 {
+        *length_counter -= 1;
+        if *length_counter == 0 && !trigger {
+            *enabled = false;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Square channel (channels 1 and 2; channel 1 also has a sweep unit)
 // ---------------------------------------------------------------------------
@@ -136,6 +162,10 @@ struct SquareChannel {
     sweep_timer: u8,
     sweep_enabled: bool,
     sweep_shadow: u16,
+    /// Whether a sweep calculation has run in negate mode since the last
+    /// trigger. Clearing negate (NR10) after such a calc disables the channel
+    /// (dmg_sound 05).
+    sweep_neg_used: bool,
 }
 
 impl SquareChannel {
@@ -157,6 +187,7 @@ impl SquareChannel {
             sweep_timer: 0,
             sweep_enabled: false,
             sweep_shadow: 0,
+            sweep_neg_used: false,
         }
     }
 
@@ -209,6 +240,7 @@ impl SquareChannel {
     fn sweep_calc(&mut self) -> u16 {
         let delta = self.sweep_shadow >> self.sweep_shift;
         let new_freq = if self.sweep_negate {
+            self.sweep_neg_used = true;
             self.sweep_shadow.wrapping_sub(delta)
         } else {
             self.sweep_shadow + delta
@@ -230,6 +262,7 @@ impl SquareChannel {
             self.sweep_shadow = self.frequency;
             self.sweep_timer = if self.sweep_period != 0 { self.sweep_period } else { 8 };
             self.sweep_enabled = self.sweep_period != 0 || self.sweep_shift != 0;
+            self.sweep_neg_used = false;
             if self.sweep_shift != 0 {
                 self.sweep_calc();
             }
@@ -513,6 +546,15 @@ impl Apu {
         }
     }
 
+    /// Whether the frame sequencer is in the *first half* of a length period —
+    /// its next step will not clock the length counters. Length is clocked on
+    /// steps 0/2/4/6, and `frame_seq_step` is the step about to run, so the next
+    /// step clocks length exactly when it is even; the first half is the odd
+    /// steps. This gates the NRx4 extra-length-clock quirk ([`length_enable_write`]).
+    fn length_first_half(&self) -> bool {
+        self.frame_seq_step % 2 == 1
+    }
+
     fn step_frame_sequencer(&mut self) {
         match self.frame_seq_step {
             0 | 4 => self.clock_length(),
@@ -620,20 +662,30 @@ impl Apu {
     }
 
     pub fn write_register(&mut self, addr: u16, value: u8) {
-        // Wave RAM and NR52 are writable even while powered off; the other
-        // registers ignore writes when the APU is off.
-        if !(self.power || addr == 0xFF26 || (0xFF30..=0xFF3F).contains(&addr)) {
+        // Wave RAM and NR52 are writable even while powered off. On DMG the
+        // length-load registers (NRx1) are too — but only their length field
+        // takes effect while off (the duty/other bits don't); see the handlers.
+        let length_load = matches!(addr, 0xFF11 | 0xFF16 | 0xFF1B | 0xFF20);
+        if !(self.power || addr == 0xFF26 || length_load || (0xFF30..=0xFF3F).contains(&addr)) {
             return;
         }
 
         match addr {
             0xFF10 => {
+                let was_negate = self.ch1.sweep_negate;
                 self.ch1.sweep_period = (value >> 4) & 0x07;
                 self.ch1.sweep_negate = value & 0x08 != 0;
                 self.ch1.sweep_shift = value & 0x07;
+                // Obscure: leaving negate mode after at least one negate-mode
+                // sweep calculation disables the channel (dmg_sound 05).
+                if was_negate && !self.ch1.sweep_negate && self.ch1.sweep_neg_used {
+                    self.ch1.enabled = false;
+                }
             }
             0xFF11 => {
-                self.ch1.duty = value >> 6;
+                if self.power {
+                    self.ch1.duty = value >> 6;
+                }
                 self.ch1.length_counter = 64 - (value & 0x3F) as u16;
             }
             0xFF12 => {
@@ -646,14 +698,27 @@ impl Apu {
             0xFF13 => self.ch1.frequency = (self.ch1.frequency & 0x700) | value as u16,
             0xFF14 => {
                 self.ch1.frequency = (self.ch1.frequency & 0xFF) | (((value & 0x07) as u16) << 8);
-                self.ch1.length_enabled = value & 0x40 != 0;
+                let first_half = self.length_first_half();
+                length_enable_write(
+                    &mut self.ch1.length_counter,
+                    &mut self.ch1.length_enabled,
+                    &mut self.ch1.enabled,
+                    value,
+                    first_half,
+                );
                 if value & 0x80 != 0 {
+                    let reload = self.ch1.length_counter == 0;
                     self.ch1.trigger();
+                    if reload && value & 0x40 != 0 && first_half {
+                        self.ch1.length_counter -= 1;
+                    }
                 }
             }
 
             0xFF16 => {
-                self.ch2.duty = value >> 6;
+                if self.power {
+                    self.ch2.duty = value >> 6;
+                }
                 self.ch2.length_counter = 64 - (value & 0x3F) as u16;
             }
             0xFF17 => {
@@ -666,9 +731,20 @@ impl Apu {
             0xFF18 => self.ch2.frequency = (self.ch2.frequency & 0x700) | value as u16,
             0xFF19 => {
                 self.ch2.frequency = (self.ch2.frequency & 0xFF) | (((value & 0x07) as u16) << 8);
-                self.ch2.length_enabled = value & 0x40 != 0;
+                let first_half = self.length_first_half();
+                length_enable_write(
+                    &mut self.ch2.length_counter,
+                    &mut self.ch2.length_enabled,
+                    &mut self.ch2.enabled,
+                    value,
+                    first_half,
+                );
                 if value & 0x80 != 0 {
+                    let reload = self.ch2.length_counter == 0;
                     self.ch2.trigger();
+                    if reload && value & 0x40 != 0 && first_half {
+                        self.ch2.length_counter -= 1;
+                    }
                 }
             }
 
@@ -683,9 +759,20 @@ impl Apu {
             0xFF1D => self.ch3.frequency = (self.ch3.frequency & 0x700) | value as u16,
             0xFF1E => {
                 self.ch3.frequency = (self.ch3.frequency & 0xFF) | (((value & 0x07) as u16) << 8);
-                self.ch3.length_enabled = value & 0x40 != 0;
+                let first_half = self.length_first_half();
+                length_enable_write(
+                    &mut self.ch3.length_counter,
+                    &mut self.ch3.length_enabled,
+                    &mut self.ch3.enabled,
+                    value,
+                    first_half,
+                );
                 if value & 0x80 != 0 {
+                    let reload = self.ch3.length_counter == 0;
                     self.ch3.trigger();
+                    if reload && value & 0x40 != 0 && first_half {
+                        self.ch3.length_counter -= 1;
+                    }
                 }
             }
 
@@ -703,9 +790,20 @@ impl Apu {
                 self.ch4.divisor_code = value & 0x07;
             }
             0xFF23 => {
-                self.ch4.length_enabled = value & 0x40 != 0;
+                let first_half = self.length_first_half();
+                length_enable_write(
+                    &mut self.ch4.length_counter,
+                    &mut self.ch4.length_enabled,
+                    &mut self.ch4.enabled,
+                    value,
+                    first_half,
+                );
                 if value & 0x80 != 0 {
+                    let reload = self.ch4.length_counter == 0;
                     self.ch4.trigger();
+                    if reload && value & 0x40 != 0 && first_half {
+                        self.ch4.length_counter -= 1;
+                    }
                 }
             }
 
@@ -726,14 +824,26 @@ impl Apu {
         }
     }
 
-    /// Reset all channels and control registers, preserving Wave RAM.
+    /// Reset all channels and control registers, preserving Wave RAM. On DMG
+    /// the length *counters* also survive a power-off (dmg_sound 08/11) — only
+    /// the rest of each channel is cleared — so we save and restore them.
     fn power_off(&mut self) {
         let wave_ram = self.ch3.wave_ram;
+        let lengths = [
+            self.ch1.length_counter,
+            self.ch2.length_counter,
+            self.ch3.length_counter,
+            self.ch4.length_counter,
+        ];
         self.ch1 = SquareChannel::new(true);
         self.ch2 = SquareChannel::new(false);
         self.ch3 = WaveChannel::new();
         self.ch3.wave_ram = wave_ram;
         self.ch4 = NoiseChannel::new();
+        self.ch1.length_counter = lengths[0];
+        self.ch2.length_counter = lengths[1];
+        self.ch3.length_counter = lengths[2];
+        self.ch4.length_counter = lengths[3];
         self.nr50 = 0;
         self.nr51 = 0;
         self.power = false;
@@ -788,6 +898,7 @@ impl SquareChannel {
         write_u8(out, self.sweep_timer);
         write_bool(out, self.sweep_enabled);
         write_u16_le(out, self.sweep_shadow);
+        write_bool(out, self.sweep_neg_used);
     }
 
     #[cfg(feature = "serialize")]
@@ -808,6 +919,7 @@ impl SquareChannel {
         self.sweep_timer = r.read_u8()?;
         self.sweep_enabled = r.read_bool()?;
         self.sweep_shadow = r.read_u16_le()?;
+        self.sweep_neg_used = r.read_bool()?;
         Ok(())
     }
 }

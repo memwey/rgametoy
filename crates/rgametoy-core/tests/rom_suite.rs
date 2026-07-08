@@ -70,12 +70,12 @@ fn blargg_cpu_and_timing_pass() {
 }
 
 /// Blargg's `dmg_sound` APU suite (reports via the `$A000` memory protocol, not
-/// serial). We pass 5/12 — the fundamentals (registers, basic length, sweep,
-/// overflow-on-trigger, len/sweep sync). The other 7 are the obscure APU
-/// hardware corners (wave-RAM access while the channel is on; length-counter
-/// clocking on enable / during power; sweep negate-mode disable; NR41 after
-/// power) — see docs/testing.md §3.9. Ratchet the passing set so it can't
-/// regress; the failing set is documented, not asserted.
+/// serial). We pass 9/12 — the fundamentals plus the length-counter obscure
+/// behaviour (extra clock on enable, across power), sweep negate-mode disable,
+/// and NR41-after-power. The 3 that remain are the wave-channel RAM access
+/// quirks (read/trigger/write while the channel is playing), which need
+/// cycle-exact wave-read timing — see docs/testing.md §3.9. Ratchet the passing
+/// set so it can't regress; the failing set is documented, not asserted.
 #[test]
 fn blargg_dmg_sound_known_passing() {
     let root = roms_root!();
@@ -83,9 +83,13 @@ fn blargg_dmg_sound_known_passing() {
     let passing = [
         "01-registers",
         "02-len ctr",
+        "03-trigger",
         "04-sweep",
+        "05-sweep details",
         "06-overflow on trigger",
         "07-len sweep period sync",
+        "08-len ctr during power",
+        "11-regs after power",
     ];
     let mut regressed = Vec::new();
     for name in passing {
