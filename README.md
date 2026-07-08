@@ -15,7 +15,8 @@ cargo run --release -- rom.gb 8                    # 2nd arg = fast-forward mult
 
 Key mapping: arrow keys = D-pad, `Z` = A, `X` = B, `Enter` = Start,
 `Backspace` = Select, **hold `Tab` = fast-forward**, `F5` = save state /
-`F7` = load state, `F2` = screenshot, `Esc` = quit.
+`F7` = load state, `F2` = screenshot, `F3` = cycle palette, `Esc` = quit.
+The window title shows the live frame rate, speed multiplier, and current palette.
 
 Fast-forward is paced against the CPU clock: each emulated frame's real-time
 budget is `frame_time / multiplier`, still presenting once per frame; releasing
@@ -36,6 +37,12 @@ the `RGAMETOY_DATA_DIR` environment variable:
 (pixel-exact, good for debugging) and prints the path. The encoder is shared with
 the headless `--example screenshot` (`src/emulator/screenshot.rs`), so the window
 and the screenshots use the same colours.
+
+**Palettes**: the core only emits shade values 0–3, so mapping them to colours is
+a pure frontend choice (`src/emulator/palette.rs`). `F3` cycles through a few
+built-in palettes — the classic DMG green plus tinted variants (grayscale, amber,
+ocean, berry) that colourise the four shades. Screenshots use whichever palette is
+active. The default is DMG green.
 
 Supported cartridges: no-MBC (32 KB), MBC1, MBC3 (no RTC) and MBC5, with external
 RAM and bank switching. A battery-backed cartridge persists its external RAM to
@@ -65,7 +72,7 @@ emulated machine, `emulator` is the frontend that drives it.
 ```text
   emulator/   host frontend — window, input, audio, files (minifb / cpal)
   ─────────   main → Emulator::run(): poll input → run_frame → present → pace
-              display · input · audio · screenshot · paths
+              display · input · audio · screenshot · palette · paths
                  │  run_frame() / framebuffer()          ▲  set_buttons()
                  ▼                                        │
   console/    the emulated DMG — deterministic, no host I/O

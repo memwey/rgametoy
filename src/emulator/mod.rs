@@ -1,5 +1,6 @@
 pub mod display;
 pub mod input;
+pub mod palette;
 pub mod paths;
 pub mod screenshot;
 #[cfg(feature = "audio")]
@@ -37,6 +38,7 @@ pub struct Emulator {
     prev_save: bool,
     prev_load: bool,
     prev_screenshot: bool,
+    prev_palette: bool,
     /// Save-file path (`<data-dir>/saves/<rom>-<hash>.sav`), set only for
     /// battery-backed cartridges.
     save_path: Option<PathBuf>,
@@ -73,6 +75,7 @@ impl Emulator {
             prev_save: false,
             prev_load: false,
             prev_screenshot: false,
+            prev_palette: false,
             save_path: None,
             data_dir: paths::data_dir(),
             rom_title: String::new(),
@@ -134,6 +137,9 @@ impl Emulator {
 
     pub fn run(&mut self) {
         let mut frames_since_save = 0u32;
+        // Rolling window for the fps read-out shown in the window title.
+        let mut fps_frames = 0u32;
+        let mut fps_window_start = Instant::now();
         while self.display.is_open() {
             let frame_start = Instant::now();
 
@@ -184,6 +190,21 @@ impl Emulator {
             if elapsed < budget {
                 std::thread::sleep(budget - elapsed);
             }
+
+            // Refresh the title's fps read-out over a ~0.5 s window (measuring
+            // real wall-clock, so it reflects the paced/turbo rate we actually
+            // hit, not the fixed emulated 59.7 Hz).
+            fps_frames += 1;
+            let window = fps_window_start.elapsed();
+            if window >= Duration::from_millis(500) {
+                let fps = fps_frames as f64 / window.as_secs_f64();
+                self.display.set_title(&format!(
+                    "rgametoy — {fps:.0} fps ({speed:.1}x) — {}",
+                    self.display.palette_name()
+                ));
+                fps_frames = 0;
+                fps_window_start = Instant::now();
+            }
         }
         // Final flush on exit.
         self.save_ram();
@@ -229,9 +250,14 @@ impl Emulator {
         if input.screenshot && !self.prev_screenshot {
             self.take_screenshot();
         }
+        if input.palette_cycle && !self.prev_palette {
+            let name = self.display.cycle_palette();
+            println!("palette: {name}");
+        }
         self.prev_save = input.save;
         self.prev_load = input.load;
         self.prev_screenshot = input.screenshot;
+        self.prev_palette = input.palette_cycle;
     }
 
     /// Write the current frame to the screenshot directory, reporting where it
@@ -244,7 +270,9 @@ impl Emulator {
             &self.rom_title
         };
         let dir = self.data_dir.join("screenshots");
-        match screenshot::save(self.console.framebuffer(), &dir, hint) {
+        // Match the window: screenshots use the active palette.
+        let palette = self.display.palette();
+        match screenshot::save(self.console.framebuffer(), &dir, hint, palette) {
             Ok(path) => println!("screenshot saved: {}", path.display()),
             Err(e) => eprintln!("screenshot failed ({}): {e}", dir.display()),
         }

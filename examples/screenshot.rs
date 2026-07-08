@@ -8,6 +8,7 @@
 
 use rgametoy::console::cartridge::Cartridge;
 use rgametoy::console::Console;
+use rgametoy::emulator::palette;
 use rgametoy::emulator::screenshot::encode_bmp;
 
 fn main() {
@@ -25,6 +26,6 @@ fn main() {
         console.run_frame();
     }
 
-    std::fs::write(&args[2], encode_bmp(console.framebuffer())).expect("write BMP");
+    std::fs::write(&args[2], encode_bmp(console.framebuffer(), palette::DEFAULT)).expect("write BMP");
     println!("wrote {} ({} frames)", args[2], frames);
 }

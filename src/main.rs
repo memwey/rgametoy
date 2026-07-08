@@ -8,7 +8,8 @@ fn main() -> ExitCode {
         None => {
             eprintln!("usage: rgametoy <rom.gb> [turbo_multiplier]");
             eprintln!("keys: arrows=D-pad  Z=A  X=B  Enter=Start  Backspace=Select");
-            eprintln!("      hold Tab=fast-forward  F5/F7=save/load state  F2=screenshot  Esc=quit");
+            eprintln!("      hold Tab=fast-forward  F5/F7=save/load state  F2=screenshot");
+            eprintln!("      F3=cycle palette  Esc=quit");
             eprintln!("data dir: ./saves/ + ./screenshots/ (override base with RGAMETOY_DATA_DIR)");
             return ExitCode::FAILURE;
         }
