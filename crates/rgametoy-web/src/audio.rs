@@ -190,3 +190,34 @@ impl AudioPlayer {
 // the closure's downcast even if we don't name them at module scope.
 #[allow(dead_code)]
 fn _ensure_targets(_: &EventTarget, _: &AudioBuffer) {}
+
+#[cfg(test)]
+mod tests {
+    use super::Resampler;
+
+    /// Output stereo frames produced from `in_frames` input frames at a ratio.
+    fn output_frames(source: u32, device: u32, in_frames: usize) -> usize {
+        let mut r = Resampler::new(source, device);
+        let input: Vec<f32> = (0..in_frames * 2).map(|i| i as f32).collect();
+        let mut out = Vec::new();
+        r.process(&input, &mut out);
+        out.len() / 2
+    }
+
+    #[test]
+    fn equal_rate_is_one_to_one() {
+        assert_eq!(output_frames(48000, 48000, 1000), 1000);
+    }
+
+    #[test]
+    fn downsample_halves_the_frames() {
+        let n = output_frames(48000, 24000, 1000) as i32;
+        assert!((n - 500).abs() <= 1, "got {n}");
+    }
+
+    #[test]
+    fn upsample_doubles_the_frames() {
+        let n = output_frames(24000, 48000, 1000) as i32;
+        assert!((n - 2000).abs() <= 2, "got {n}");
+    }
+}
