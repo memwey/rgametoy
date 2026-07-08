@@ -98,8 +98,8 @@ impl Console {
         let (dma_active, dma_src) = self.bus.debug_dma();
         Snapshot {
             cycle: self.total_cycles,
-            pc: r.pc,
-            sp: r.sp,
+            pc: r.get_pc(),
+            sp: r.get_sp(),
             af: r.get_af(),
             bc: r.get_bc(),
             de: r.get_de(),

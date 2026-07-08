@@ -1,17 +1,23 @@
 
-
+//! The SM83 register file: the four 16-bit pairs AF/BC/DE/HL plus the stack
+//! pointer and program counter. Flags live in the low byte of AF — Z/N/H/C in
+//! bits 7/6/5/4 — and its low nibble always reads 0.
+//!
+//! Fields are `pub(super)` so the CPU core reaches them directly (a register
+//! *is* the data), while everything outside the `cpu` module goes through the
+//! typed accessors below (the 8-bit halves do the byte extract/insert).
 
 #[derive(Clone)]
 pub struct Registers {
     // Accumulator and Flags
-    pub af: u16,
-    pub bc: u16,
-    pub de: u16,
-    pub hl: u16,
+    pub(super) af: u16,
+    pub(super) bc: u16,
+    pub(super) de: u16,
+    pub(super) hl: u16,
     // Stack Pointer
-    pub sp: u16,
+    pub(super) sp: u16,
     // Program Counter
-    pub pc: u16,
+    pub(super) pc: u16,
 }
 
 const ZERO_FLAG_BYTE_POSITION: u8 = 7; // z
@@ -109,6 +115,14 @@ impl Registers {
 
     pub fn set_hl(&mut self, value: u16) {
         self.hl = value;
+    }
+
+    pub fn get_sp(&self) -> u16 {
+        self.sp
+    }
+
+    pub fn get_pc(&self) -> u16 {
+        self.pc
     }
 
     // --- Individual 8-bit register accessors ---

@@ -1,3 +1,6 @@
+//! Work RAM (WRAM, 0xC000-0xDFFF, 8 KB) and its echo mirror (0xE000-0xFDFF).
+//! On DMG this is a single flat bank (bank switching only exists on CGB).
+
 const WRAM_SIZE: usize = 0x2000; // 8KB
 
 #[derive(Clone)]

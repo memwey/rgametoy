@@ -1,3 +1,7 @@
+//! High RAM (HRAM, 0xFF80-0xFFFE): 127 bytes of RAM on the CPU die. It stays
+//! accessible during OAM DMA (when the rest of the bus is blocked), which is why
+//! DMA-wait routines are copied here and run from HRAM.
+
 const HRAM_SIZE: usize = 0x007F; // 127 bytes
 
 #[derive(Clone)]
