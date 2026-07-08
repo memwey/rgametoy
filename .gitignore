@@ -25,5 +25,6 @@ target
 
 /target
 
-# Screenshots saved by the F2 hotkey
+# Emulator data dir (default base = cwd): battery saves + F2 screenshots
+/saves/
 /screenshots/

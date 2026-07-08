@@ -10,6 +10,7 @@
 //! wants.
 
 use crate::console::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::emulator::paths::sanitize;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -57,14 +58,6 @@ pub fn encode_bmp(framebuffer: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Where interactive screenshots go by default: `$RGAMETOY_SCREENSHOT_DIR`, or
-/// a `screenshots/` folder in the working directory.
-pub fn default_dir() -> PathBuf {
-    std::env::var_os("RGAMETOY_SCREENSHOT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("screenshots"))
-}
-
 /// Save a screenshot into `dir` (created if missing) and return its path.
 /// The file is `<name_hint>-<epoch_ms>.bmp`; `name_hint` is sanitised and, if
 /// empty, falls back to `rgametoy`, so the file is always identifiable and
@@ -78,20 +71,6 @@ pub fn save(framebuffer: &[u8], dir: &Path, name_hint: &str) -> std::io::Result<
     let path = dir.join(format!("{}-{}.bmp", sanitize(name_hint), stamp));
     std::fs::write(&path, encode_bmp(framebuffer))?;
     Ok(path)
-}
-
-/// Reduce an arbitrary ROM title to a safe, readable file-name stem.
-fn sanitize(s: &str) -> String {
-    let cleaned: String = s
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect();
-    let trimmed = cleaned.trim_matches('_');
-    if trimmed.is_empty() {
-        "rgametoy".to_string()
-    } else {
-        trimmed.to_string()
-    }
 }
 
 #[cfg(test)]
@@ -119,14 +98,6 @@ mod tests {
         let (r, g, b) = DMG_PALETTE[3];
         let last_row = 54 + (SCREEN_HEIGHT - 1) * SCREEN_WIDTH * 3;
         assert_eq!(&bmp[last_row..last_row + 3], &[b, g, r]);
-    }
-
-    #[test]
-    fn sanitize_falls_back_and_strips() {
-        assert_eq!(sanitize("Tetris"), "Tetris");
-        assert_eq!(sanitize("SUPER MARIO"), "SUPER_MARIO");
-        assert_eq!(sanitize(""), "rgametoy");
-        assert_eq!(sanitize("\0\0"), "rgametoy");
     }
 
     #[test]

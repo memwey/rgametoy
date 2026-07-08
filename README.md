@@ -16,14 +16,24 @@ cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍
 快进以 CPU 时钟为基准:每个模拟帧的真实时间预算 = `一帧时间 / 倍率`,呈现仍每帧一次;
 松开 `Tab` 立即回原速。快进期间音频静音(避免过量采样)。
 
-**截图**:`F2` 把当前帧按原生 160×144 存成 24-bit BMP(像素精确,适合调试),落到
-`./screenshots/`(可用环境变量 `RGAMETOY_SCREENSHOT_DIR` 改目录),文件名
-`<卡带标题>-<毫秒时间戳>.bmp`,存好后在终端打印路径。编码器与无头的
-`--example screenshot` 共用一份(`src/emulator/screenshot.rs`),窗口与截图配色一致。
+**数据目录**:存档和截图都放在一个 base 目录下的两个子文件夹,base 默认为当前目录、可用
+环境变量 `RGAMETOY_DATA_DIR` 覆盖:
+
+```text
+<base>/
+├── saves/        <卡带文件名>-<内容哈希8位>.sav   (电池 SRAM)
+└── screenshots/  <卡带标题>-<毫秒时间戳>.bmp       (F2 截图)
+```
+
+**截图**:`F2` 把当前帧按原生 160×144 存成 24-bit BMP(像素精确,适合调试),存好后在终端
+打印路径。编码器与无头的 `--example screenshot` 共用一份(`src/emulator/screenshot.rs`),
+窗口与截图配色一致。
 
 支持的卡带:无 MBC (32KB)、MBC1、MBC3(不含 RTC)、MBC5,含外部 RAM 与 bank 切换。
-带电池的卡带会把外部 RAM 存档持久化到与 ROM 同目录的 `<rom>.sav` 文件
-(启动时自动读回,运行中防抖落盘,退出时兜底保存)。
+带电池的卡带把外部 RAM 存档持久化到 `saves/<卡带文件名>-<内容哈希>.sav`——文件名可读、
+哈希绑 ROM 内容(同名不同 ROM 不撞),`.sav` 本身是裸 SRAM(与其它模拟器通用)。启动时自动
+读回(找不到则回退读旧的同目录 `<rom>.sav`,下次落盘即迁移到新位置),运行中防抖落盘,
+退出时兜底保存。
 
 已实现:完整 SM83 指令集(含 CB 前缀)、中断(VBlank/STAT/Timer/Serial/Joypad)、Timer、
 PPU 像素-FIFO 渲染(背景 / 窗口 / 精灵,mode 3 逐点)、OAM DMA、串口(截获输出)、键盘输入、

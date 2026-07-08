@@ -1,5 +1,6 @@
 pub mod display;
 pub mod input;
+pub mod paths;
 pub mod screenshot;
 #[cfg(feature = "audio")]
 pub mod audio;
@@ -37,11 +38,12 @@ pub struct Emulator {
     prev_save: bool,
     prev_load: bool,
     prev_screenshot: bool,
-    /// `<rom>.sav` path, set only for battery-backed cartridges.
+    /// Save-file path (`<data-dir>/saves/<rom>-<hash>.sav`), set only for
+    /// battery-backed cartridges.
     save_path: Option<PathBuf>,
-    /// Where F2 screenshots are written, and the loaded ROM's title (used to
-    /// name them).
-    screenshot_dir: PathBuf,
+    /// Base data directory holding `saves/` and `screenshots/`, and the loaded
+    /// ROM's title (used to name screenshots).
+    data_dir: PathBuf,
     rom_title: String,
     #[cfg(feature = "audio")]
     audio: Option<crate::emulator::audio::AudioPlayer>,
@@ -74,7 +76,7 @@ impl Emulator {
             prev_load: false,
             prev_screenshot: false,
             save_path: None,
-            screenshot_dir: screenshot::default_dir(),
+            data_dir: paths::data_dir(),
             rom_title: String::new(),
             #[cfg(feature = "audio")]
             audio,
@@ -86,31 +88,44 @@ impl Emulator {
         self.turbo_speed = speed.max(1.0);
     }
 
-    /// Directory F2 screenshots are written to (default: `$RGAMETOY_SCREENSHOT_DIR`
-    /// or `screenshots/`).
-    pub fn set_screenshot_dir<P: Into<PathBuf>>(&mut self, dir: P) {
-        self.screenshot_dir = dir.into();
+    /// Base data directory holding `saves/` and `screenshots/` (default:
+    /// `$RGAMETOY_DATA_DIR` or the working directory). Set before `load_rom`.
+    pub fn set_data_dir<P: Into<PathBuf>>(&mut self, dir: P) {
+        self.data_dir = dir.into();
     }
 
     /// Load a `.gb` ROM from disk and boot into the DMG post-boot state. For a
-    /// battery-backed cartridge, restore its save from a sibling `.sav` file if
-    /// one exists.
+    /// battery-backed cartridge, restore its save from `<data-dir>/saves`
+    /// (falling back to a legacy sibling `<rom>.sav` if present).
     pub fn load_rom<P: AsRef<Path>>(&mut self, path: P) -> std::io::Result<()> {
         let data = std::fs::read(&path)?;
+        // Derive the save name from the ROM bytes before they move into the
+        // cartridge (hashing a few MB is negligible and avoids a full copy).
+        let save_name = paths::save_name(path.as_ref(), &data);
         let cartridge = Cartridge::from_bytes(data);
         self.rom_title = cartridge.title().to_string();
         println!("Loaded ROM: \"{}\"", self.rom_title);
         self.console.load_cartridge(cartridge);
 
         if self.console.get_bus_mut().cartridge().has_battery() {
-            let save_path = path.as_ref().with_extension("sav");
-            match std::fs::read(&save_path) {
-                Ok(saved) => {
-                    self.console.get_bus_mut().cartridge_mut().load_ram(&saved);
-                    println!("Loaded save: {}", save_path.display());
+            // Saves live in <data-dir>/saves keyed by ROM name + content hash.
+            let save_path = self.data_dir.join("saves").join(save_name);
+            // Read the current-scheme save, else fall back to a legacy sibling
+            // `<rom>.sav` so pre-existing saves migrate on the next flush.
+            let legacy = path.as_ref().with_extension("sav");
+            let loaded = match std::fs::read(&save_path) {
+                Ok(saved) => Some((saved, save_path.clone())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::read(&legacy)
+                    .ok()
+                    .map(|saved| (saved, legacy.clone())),
+                Err(e) => {
+                    eprintln!("could not read save {}: {e}", save_path.display());
+                    None
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => eprintln!("could not read save {}: {e}", save_path.display()),
+            };
+            if let Some((saved, from)) = loaded {
+                self.console.get_bus_mut().cartridge_mut().load_ram(&saved);
+                println!("Loaded save: {}", from.display());
             }
             self.save_path = Some(save_path);
         }
@@ -185,6 +200,13 @@ impl Emulator {
             return;
         }
         let ram = bus.cartridge().ram().to_vec();
+        // The saves/ directory may not exist yet on the first flush.
+        if let Some(dir) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                eprintln!("failed to create save dir {}: {e}", dir.display());
+                return;
+            }
+        }
         match std::fs::write(&path, &ram) {
             Ok(()) => bus.cartridge_mut().clear_ram_dirty(),
             Err(e) => eprintln!("failed to write save {}: {e}", path.display()),
@@ -221,9 +243,10 @@ impl Emulator {
         } else {
             &self.rom_title
         };
-        match screenshot::save(self.console.framebuffer(), &self.screenshot_dir, hint) {
+        let dir = self.data_dir.join("screenshots");
+        match screenshot::save(self.console.framebuffer(), &dir, hint) {
             Ok(path) => println!("screenshot saved: {}", path.display()),
-            Err(e) => eprintln!("screenshot failed ({}): {e}", self.screenshot_dir.display()),
+            Err(e) => eprintln!("screenshot failed ({}): {e}", dir.display()),
         }
     }
 
