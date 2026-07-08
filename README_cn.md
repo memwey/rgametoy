@@ -13,12 +13,15 @@ cargo run --release --features audio -- rom.gb     # 开启声音(引入 cpal)
 cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍率(默认 4)
 ```
 
-按键映射:方向键 = 方向键,`Z` = A,`X` = B,`Enter` = Start,`Backspace` = Select,
-**按住 `Tab` = 快进**,`F5` = 即时存档 / `F7` = 即时读档,`F2` = 截图,`F3` = 切换配色,
-`Esc` = 退出。窗口标题会实时显示帧率、速度倍率和当前配色。
+按键映射(desktop 与 web 前端完全一致):方向键 = 方向键,`Z` = A,`X` = B,`Enter` = Start,
+`右 Shift` = Select,**按住 `Space` = 快进**,`5` = 即时存档 / `7` = 即时读档,`2` = 截图,
+`3` = 切换配色,`Esc` = 退出(desktop)。窗口标题会实时显示帧率、速度倍率和当前配色。
 
-快进以 CPU 时钟为基准:每个模拟帧的真实时间预算 = `一帧时间 / 倍率`,呈现仍每帧一次;
-松开 `Tab` 立即回原速。快进期间音频静音(避免过量采样)。
+所有计时都以**模拟出的 Game Boy 输出**(~59.7 fps)为钟,而不是 host 显示:速度是模拟输出速率
+相对墙钟而言,显示只是随之适配(能呈现多少呈现多少,必要时丢帧)。快进因此也以这个钟为基准——
+每个模拟帧的真实时间预算 = `一帧时间 / 倍率`,所以 N× 意味着 DMG 每秒产出 N × 59.7 帧,与显示器
+刷新率无关;松开 `Space` 立即回原速。快进期间音频静音(N× 下 APU 每真实秒产出的采样数对不上,
+且加速后的音乐也没意义)。web 前端遵循同一原则——见 `docs/web_spec.md` §6.1。
 
 **数据目录**:存档和截图都放在一个 base 目录下的两个子文件夹,base 默认为当前目录、可用
 环境变量 `RGAMETOY_DATA_DIR` 覆盖:
@@ -26,15 +29,15 @@ cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍
 ```text
 <base>/
 ├── saves/        <卡带文件名>-<内容哈希8位>.sav   (电池 SRAM)
-└── screenshots/  <卡带标题>-<毫秒时间戳>.bmp       (F2 截图)
+└── screenshots/  <卡带标题>-<毫秒时间戳>.bmp       (数字 2 键截图)
 ```
 
-**截图**:`F2` 把当前帧按原生 160×144 存成 24-bit BMP(像素精确,适合调试),存好后在终端
+**截图**:数字 `2` 键把当前帧按原生 160×144 存成 24-bit BMP(像素精确,适合调试),存好后在终端
 打印路径。编码器与无头的 `-p rgametoy-desktop --example screenshot` 共用一份(`crates/rgametoy-desktop/src/screenshot.rs`),
 窗口与截图配色一致。
 
 **配色**:核心只输出 0–3 四级灰度,把灰度映射成颜色是纯前端的选择
-(`crates/rgametoy-desktop/src/palette.rs`)。`F3` 在几套内置配色间循环——经典 DMG 绿,以及给四级灰度上色
+(`crates/rgametoy-desktop/src/palette.rs`)。数字 `3` 键在几套内置配色间循环——经典 DMG 绿,以及给四级灰度上色
 的变体(grayscale、amber、ocean、berry)。截图使用当前生效的配色。默认是 DMG 绿。
 
 **显示**:窗口把**原生 160×144** 的缓冲交给 minifb 后端(macOS 上是 Metal),由 GPU 做最近邻
@@ -52,12 +55,12 @@ cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍
 
 已实现:完整 SM83 指令集(含 CB 前缀)、中断(VBlank/STAT/Timer/Serial/Joypad)、Timer、
 PPU 像素-FIFO 渲染(背景 / 窗口 / 精灵,mode 3 逐点)、OAM DMA、串口(截获输出)、键盘输入、
-截图(F2)、电池存档 (`.sav`)、**APU 四声道声音**(方波 ×2 + 波形 + 噪声,含扫频 / 包络 /
+截图(数字 2 键)、电池存档 (`.sav`)、**APU 四声道声音**(方波 ×2 + 波形 + 噪声,含扫频 / 包络 /
 长度计数器)。APU 仿真核心是纯 Rust、默认编译;真实音频输出通过 `audio` feature(cpal)开启,
 默认关闭。
 
-另外支持**快进/加速**(按住 Tab,倍率可配)和**即时存档 / 读档 (save state)**
-(F5/F7,把整机序列化成字节、存到内存槽)。PPU 是**像素 FIFO**(mode 3 逐点、行内改寄存器
+另外支持**快进/加速**(按住 Space,倍率可配)和**即时存档 / 读档 (save state)**
+(`5`/`7`,把整机序列化成字节、存到内存槽)。PPU 是**像素 FIFO**(mode 3 逐点、行内改寄存器
 生效)。尚未实现:MBC3 RTC、MBC2。
 
 ## 架构

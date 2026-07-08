@@ -21,10 +21,15 @@ Key mapping (identical in the desktop and web frontends): arrow keys = D-pad,
 `2` = screenshot, `3` = cycle palette, `Esc` = quit (desktop).
 The window title shows the live frame rate, speed multiplier, and current palette.
 
-Fast-forward is paced against the CPU clock: each emulated frame's real-time
-budget is `frame_time / multiplier`, still presenting once per frame; releasing
-`Space` returns to full speed immediately. Audio is muted while fast-forwarding
-(to avoid over-producing samples).
+The clock for all pacing is the **emulated Game Boy's output** (~59.7 fps), not
+the host display: speed is the emulated output rate against the wall clock, and
+the display just adapts (presents whatever it can, frame-skipping if needed).
+Fast-forward is therefore paced against that clock — each emulated frame's
+real-time budget is `frame_time / multiplier`, so N× means the DMG produces
+N × 59.7 fps regardless of monitor refresh; releasing `Space` returns to full
+speed immediately. Audio is muted while fast-forwarding (at N× the APU produces
+the wrong number of samples per real second, and sped-up audio is meaningless).
+The web frontend follows the same principle — see `docs/web_spec.md` §6.1.
 
 **Data directory**: saves and screenshots go into two subfolders under one base
 directory. The base defaults to the working directory and can be overridden with
