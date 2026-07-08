@@ -96,6 +96,18 @@ impl Emulator {
     /// battery-backed cartridge, restore its save from `<data-dir>/saves`.
     pub fn load_rom<P: AsRef<Path>>(&mut self, path: P) -> std::io::Result<()> {
         let data = std::fs::read(&path)?;
+        // Refuse a cartridge type we don't implement, rather than silently
+        // mis-emulating it as MBC1 (e.g. MBC2 has a different bank layout).
+        let cart_type = data.get(0x0147).copied().unwrap_or(0);
+        if !Cartridge::is_type_supported(cart_type) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "unsupported cartridge type {cart_type:#04x} \
+                     (only no-MBC / MBC1 / MBC3-no-RTC / MBC5 are implemented)"
+                ),
+            ));
+        }
         // Derive the save name from the ROM bytes before they move into the
         // cartridge (hashing a few MB is negligible and avoids a full copy).
         let save_name = paths::save_name(path.as_ref(), &data);

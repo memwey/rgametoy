@@ -2,6 +2,19 @@ extern crate rgametoy;
 
 use rgametoy::console::cartridge::Cartridge;
 
+/// `is_type_supported` recognises exactly the MBCs we implement, so the frontend
+/// can refuse the rest instead of mis-emulating them (e.g. MBC2 as MBC1).
+#[test]
+fn cartridge_type_support_is_classified() {
+    for supported in [0x00, 0x01, 0x03, 0x0F, 0x13, 0x19, 0x1E] {
+        assert!(Cartridge::is_type_supported(supported), "type {supported:#04x}");
+    }
+    for unsupported in [0x05, 0x06, 0x08, 0x20, 0xFC] {
+        // MBC2 (05/06), plain RAM (08), MBC6 (20), and a nonsense type (FC).
+        assert!(!Cartridge::is_type_supported(unsupported), "type {unsupported:#04x}");
+    }
+}
+
 /// Build a 4-bank (64 KB) ROM whose first byte of each 16 KB bank is the bank
 /// index, declared as an MBC1 cartridge with 8 KB of RAM.
 fn banked_rom() -> Vec<u8> {

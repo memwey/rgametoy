@@ -55,16 +55,13 @@ impl Cartridge {
     /// memory bank controller and external RAM size.
     pub fn from_bytes(data: Vec<u8>) -> Cartridge {
         let type_byte = data.get(0x0147).copied().unwrap_or(0);
-        let kind = match type_byte {
-            0x00 => MbcKind::None,
-            0x01..=0x03 => MbcKind::Mbc1,
-            0x0F..=0x13 => MbcKind::Mbc3,
-            0x19..=0x1E => MbcKind::Mbc5,
-            other => {
-                eprintln!("warning: unsupported cartridge type {other:#04x}, treating as MBC1");
-                MbcKind::Mbc1
-            }
-        };
+        // Lenient at the library level: an unimplemented type falls back to MBC1
+        // with a warning so `from_bytes` never fails. The frontend refuses such
+        // ROMs up front via `is_type_supported` (see `Emulator::load_rom`).
+        let kind = Self::classify(type_byte).unwrap_or_else(|| {
+            eprintln!("warning: unsupported cartridge type {type_byte:#04x}, treating as MBC1");
+            MbcKind::Mbc1
+        });
 
         // Cartridge types whose external RAM is battery-backed (persistent).
         let has_battery = matches!(
@@ -96,6 +93,27 @@ impl Cartridge {
             ram_enabled: false,
             banking_mode: 0,
         }
+    }
+
+    /// The MBC a cartridge-type byte (header 0x0147) selects, or `None` if we
+    /// don't implement it (e.g. MBC2, MMM01). The single source of truth for
+    /// both `from_bytes` and [`Cartridge::is_type_supported`].
+    fn classify(type_byte: u8) -> Option<MbcKind> {
+        match type_byte {
+            0x00 => Some(MbcKind::None),
+            0x01..=0x03 => Some(MbcKind::Mbc1),
+            0x0F..=0x13 => Some(MbcKind::Mbc3),
+            0x19..=0x1E => Some(MbcKind::Mbc5),
+            _ => None,
+        }
+    }
+
+    /// Whether the cartridge-type byte (header 0x0147) is one we implement. The
+    /// frontend calls this to refuse a ROM it would otherwise mis-emulate (the
+    /// library `from_bytes` falls back to MBC1 for unknown types, which is wrong
+    /// for e.g. MBC2's different bank layout).
+    pub fn is_type_supported(type_byte: u8) -> bool {
+        Self::classify(type_byte).is_some()
     }
 
     /// Whether this cartridge persists its external RAM (has a battery).
