@@ -90,6 +90,12 @@ impl Timer {
         }
     }
 
+    /// `(DIV, TIMA, TMA, TAC)` for the `debug` inspector.
+    #[cfg(feature = "debug")]
+    pub fn debug_state(&self) -> (u8, u8, u8, u8) {
+        ((self.counter >> 8) as u8, self.tima, self.tma, self.tac)
+    }
+
     pub fn read_register(&self, addr: u16) -> u8 {
         match addr {
             0xFF04 => (self.counter >> 8) as u8,

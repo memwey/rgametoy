@@ -110,6 +110,24 @@ impl MemoryBus {
         self.if_register |= interrupt_type.to_bit();
     }
 
+    /// OAM DMA state `(active, source page)` for the `debug` inspector.
+    #[cfg(feature = "debug")]
+    pub fn debug_dma(&self) -> (bool, u8) {
+        (self.dma_remaining > 0, self.dma_source)
+    }
+
+    /// Internal PPU state for the inspector (the bus owns the PPU privately).
+    #[cfg(feature = "debug")]
+    pub fn debug_ppu(&self) -> (u8, u16, bool, bool) {
+        self.ppu.debug_state()
+    }
+
+    /// Internal timer state for the inspector.
+    #[cfg(feature = "debug")]
+    pub fn debug_timer(&self) -> (u8, u8, u8, u8) {
+        self.timer.debug_state()
+    }
+
     /// Activate a pending OAM DMA once its startup delay elapses: copy 160 bytes
     /// from `dma_source << 8` into OAM and open the 640-T-cycle busy window
     /// (during which only HRAM is accessible). The copy is done atomically here;

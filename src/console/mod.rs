@@ -2,6 +2,8 @@ pub mod apu;
 pub mod bus;
 pub mod cartridge;
 pub mod cpu;
+#[cfg(feature = "debug")]
+pub mod debug;
 pub mod hram;
 pub mod interrupts;
 pub mod joypad;

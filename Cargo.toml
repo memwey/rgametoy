@@ -8,6 +8,11 @@ default = []
 # Real-time audio output via cpal. Off by default so the core stays
 # dependency-free; the APU always produces samples regardless.
 audio = ["dep:cpal"]
+# Read-only inspection of the running machine (state snapshots + breakpoints),
+# for calibrating against hardware test ROMs. Off by default so the release
+# build carries no debug surface; enable with `--features debug`. See
+# `examples/inspect.rs`.
+debug = []
 
 [dependencies]
 minifb = "0.25"

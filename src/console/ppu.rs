@@ -158,6 +158,14 @@ impl Ppu {
         self.mode
     }
 
+    /// Internal state for the `debug` inspector: `(internal mode, dot within the
+    /// line, LY==LYC latch, STAT interrupt line)`. None of these are visible
+    /// through a register read (the STAT mode bits lag; the rest are internal).
+    #[cfg(feature = "debug")]
+    pub fn debug_state(&self) -> (u8, u16, bool, bool) {
+        (self.mode as u8, self.dots, self.lyc_match, self.stat_line)
+    }
+
     pub fn framebuffer(&self) -> &[u8] {
         &self.framebuffer
     }
