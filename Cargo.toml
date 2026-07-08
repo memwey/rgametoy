@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/rgametoy-core", "crates/rgametoy-desktop"]
+members = ["crates/rgametoy-core", "crates/rgametoy-desktop", "crates/rgametoy-web"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,0 +1,136 @@
+/* Minimal but readable layout: dark background, the canvas is the visual
+ * focus, the control bar is one row at the bottom. Pixel-art crispness
+ * comes from `image-rendering: pixelated` on the canvas, which the
+ * browser applies to any upscaling. */
+
+:root {
+  --bg: #0d1117;
+  --bg-elev: #161b22;
+  --fg: #c9d1d9;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --border: #30363d;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  min-height: 100vh;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 1rem;
+  gap: 1rem;
+}
+
+.topbar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+#status {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+#fps {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-left: 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+.stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.screen-wrap {
+  background: #000;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+}
+
+#screen {
+  display: block;
+  /* 160×144 native, scale ×4 → 640×576. */
+  width: 640px;
+  height: 576px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+button {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.8rem;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+button:hover {
+  background: #1c222b;
+  border-color: var(--accent);
+}
+
+button:active {
+  background: #232b35;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-left: auto;
+}
+
+@media (max-width: 700px) {
+  #screen {
+    /* Scale 3× on small screens so the controls still fit. */
+    width: 480px;
+    height: 432px;
+  }
+  .hint {
+    width: 100%;
+    margin-left: 0;
+  }
+}

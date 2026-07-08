@@ -11,6 +11,8 @@
 
 use std::collections::VecDeque;
 
+use crate::state::{write_bool, write_u16_le, write_u8, Reader, SaveStateError};
+
 const VRAM_SIZE: usize = 0x2000; // 8 KB
 const OAM_SIZE: usize = 0xA0; // 160 bytes (0xFE00-0xFE9F)
 pub const SCREEN_WIDTH: usize = 160;
@@ -25,6 +27,73 @@ const LCDON_LINE0_DOTS: u16 = LINE_DOTS - 4;
 // Interrupt request bits (matches the IF register layout).
 const INT_VBLANK: u8 = 0x01;
 const INT_LCDSTAT: u8 = 0x02;
+
+/// On-disk tag for [`PpuMode`]. Bumping the enum's source-order won't change
+/// these — they're pinned so v1 save states stay readable across refactors.
+#[repr(u8)]
+#[derive(Clone, Copy)]
+enum PpuModeTag {
+    HBlank = 0,
+    VBlank = 1,
+    OamScan = 2,
+    Drawing = 3,
+}
+
+impl PpuMode {
+    fn tag(self) -> u8 {
+        match self {
+            PpuMode::HBlank => PpuModeTag::HBlank as u8,
+            PpuMode::VBlank => PpuModeTag::VBlank as u8,
+            PpuMode::OamScan => PpuModeTag::OamScan as u8,
+            PpuMode::Drawing => PpuModeTag::Drawing as u8,
+        }
+    }
+}
+
+impl PpuModeTag {
+    fn from(b: u8) -> Option<PpuMode> {
+        match b {
+            0 => Some(PpuMode::HBlank),
+            1 => Some(PpuMode::VBlank),
+            2 => Some(PpuMode::OamScan),
+            3 => Some(PpuMode::Drawing),
+            _ => None,
+        }
+    }
+}
+
+/// On-disk tag for the BG fetcher's micro-step.
+#[repr(u8)]
+#[derive(Clone, Copy)]
+enum FetchStateTag {
+    Tile = 0,
+    DataLow = 1,
+    DataHigh = 2,
+    Push = 3,
+}
+
+impl FetchState {
+    fn tag(self) -> u8 {
+        match self {
+            FetchState::Tile => FetchStateTag::Tile as u8,
+            FetchState::DataLow => FetchStateTag::DataLow as u8,
+            FetchState::DataHigh => FetchStateTag::DataHigh as u8,
+            FetchState::Push => FetchStateTag::Push as u8,
+        }
+    }
+}
+
+impl FetchStateTag {
+    fn from(b: u8) -> Option<FetchState> {
+        match b {
+            0 => Some(FetchState::Tile),
+            1 => Some(FetchState::DataLow),
+            2 => Some(FetchState::DataHigh),
+            3 => Some(FetchState::Push),
+            _ => None,
+        }
+    }
+}
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum PpuMode {
@@ -768,6 +837,152 @@ impl Ppu {
             0xFF4B => self.wx = value,
             _ => {}
         }
+    }
+
+    /// Append the entire PPU state to `out`. The 8 KB VRAM and 23 KB
+    /// framebuffer dominate (~31 KB); everything else fits in <100 bytes.
+    /// The order of every field is mirrored by [`Self::read_state`] and is
+    /// part of the on-disk format — do not reorder without bumping
+    /// `SAVE_STATE_VERSION`.
+    pub fn write_state(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.vram);
+        out.extend_from_slice(&self.oam);
+        out.extend_from_slice(&self.framebuffer);
+
+        write_u8(out, self.mode.tag());
+        write_u16_le(out, self.dots);
+        write_u8(out, self.ly);
+        write_u8(out, self.window_line);
+        write_u8(out, self.prev_mode.tag());
+        write_u8(out, self.transition_age);
+        write_bool(out, self.stat_line);
+        write_bool(out, self.lyc_match);
+        write_u8(out, self.lyc_blank);
+        write_bool(out, self.frame_ready);
+
+        write_u8(out, self.lcdc);
+        write_u8(out, self.stat);
+        write_u8(out, self.scy);
+        write_u8(out, self.scx);
+        write_u8(out, self.lyc);
+        write_u8(out, self.dma);
+        write_u8(out, self.bgp);
+        write_u8(out, self.obp0);
+        write_u8(out, self.obp1);
+        write_u8(out, self.wy);
+        write_u8(out, self.wx);
+
+        // Mode-3 pixel pipeline.
+        write_u8(out, self.draw_x);
+        write_u8(out, self.fetch_state.tag());
+        write_bool(out, self.fetch_step);
+        write_u8(out, self.fetch_x);
+        write_u8(out, self.fetch_tile_id);
+        write_u8(out, self.fetch_lo);
+        write_u8(out, self.fetch_hi);
+        write_u8(out, self.bg_fifo.len() as u8);
+        for &b in self.bg_fifo.iter() {
+            write_u8(out, b);
+        }
+        for px in &self.obj_fifo {
+            write_u8(out, px.color);
+            write_bool(out, px.use_obp1);
+            write_bool(out, px.priority);
+        }
+        write_u8(out, self.discard);
+        write_bool(out, self.window_active);
+        write_bool(out, self.wy_triggered);
+        for &i in &self.line_sprites {
+            write_u8(out, i);
+        }
+        write_u8(out, self.line_sprite_count);
+        for &f in &self.sprite_fetched {
+            write_bool(out, f);
+        }
+        write_u8(out, self.sprite_delay);
+        write_u16_le(out, self.sprite_index as u16);
+        match self.sprite_last_x {
+            Some(x) => {
+                write_bool(out, true);
+                write_u8(out, x);
+            }
+            None => write_bool(out, false),
+        }
+        write_u8(out, self.warmup);
+        write_bool(out, self.lcd_on_line0);
+        write_bool(out, self.stat_irq_pending);
+    }
+
+    pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
+        self.vram.copy_from_slice(r.read_exact(VRAM_SIZE)?);
+        self.oam.copy_from_slice(r.read_exact(OAM_SIZE)?);
+        self.framebuffer
+            .copy_from_slice(r.read_exact(SCREEN_WIDTH * SCREEN_HEIGHT)?);
+
+        self.mode = PpuModeTag::from(r.read_u8()?)
+            .ok_or(SaveStateError::Truncated)?;
+        self.dots = r.read_u16_le()?;
+        self.ly = r.read_u8()?;
+        self.window_line = r.read_u8()?;
+        self.prev_mode = PpuModeTag::from(r.read_u8()?)
+            .ok_or(SaveStateError::Truncated)?;
+        self.transition_age = r.read_u8()?;
+        self.stat_line = r.read_bool()?;
+        self.lyc_match = r.read_bool()?;
+        self.lyc_blank = r.read_u8()?;
+        self.frame_ready = r.read_bool()?;
+
+        self.lcdc = r.read_u8()?;
+        self.stat = r.read_u8()?;
+        self.scy = r.read_u8()?;
+        self.scx = r.read_u8()?;
+        self.lyc = r.read_u8()?;
+        self.dma = r.read_u8()?;
+        self.bgp = r.read_u8()?;
+        self.obp0 = r.read_u8()?;
+        self.obp1 = r.read_u8()?;
+        self.wy = r.read_u8()?;
+        self.wx = r.read_u8()?;
+
+        self.draw_x = r.read_u8()?;
+        self.fetch_state = FetchStateTag::from(r.read_u8()?)
+            .ok_or(SaveStateError::Truncated)?;
+        self.fetch_step = r.read_bool()?;
+        self.fetch_x = r.read_u8()?;
+        self.fetch_tile_id = r.read_u8()?;
+        self.fetch_lo = r.read_u8()?;
+        self.fetch_hi = r.read_u8()?;
+        let fifo_len = r.read_u8()? as usize;
+        let fifo_bytes = r.read_exact(fifo_len)?;
+        self.bg_fifo.clear();
+        for &b in fifo_bytes {
+            self.bg_fifo.push_back(b);
+        }
+        for px in &mut self.obj_fifo {
+            px.color = r.read_u8()?;
+            px.use_obp1 = r.read_bool()?;
+            px.priority = r.read_bool()?;
+        }
+        self.discard = r.read_u8()?;
+        self.window_active = r.read_bool()?;
+        self.wy_triggered = r.read_bool()?;
+        let line_sprite_bytes = r.read_exact(self.line_sprites.len())?;
+        self.line_sprites.copy_from_slice(line_sprite_bytes);
+        self.line_sprite_count = r.read_u8()?;
+        for f in &mut self.sprite_fetched {
+            *f = r.read_bool()?;
+        }
+        self.sprite_delay = r.read_u8()?;
+        self.sprite_index = r.read_u16_le()? as usize;
+        self.sprite_last_x = if r.read_bool()? {
+            Some(r.read_u8()?)
+        } else {
+            None
+        };
+        self.warmup = r.read_u8()?;
+        self.lcd_on_line0 = r.read_bool()?;
+        self.stat_irq_pending = r.read_bool()?;
+        Ok(())
     }
 }
 

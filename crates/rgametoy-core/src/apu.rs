@@ -10,6 +10,8 @@
 //! This module is pure logic with no I/O; actual playback lives behind the
 //! optional `audio` feature (see `audio.rs`).
 
+use crate::state::{write_bool, write_u16_le, write_u32_le, write_u64_le, write_u8, Reader, SaveStateError};
+
 const CPU_HZ: f64 = 4_194_304.0;
 
 /// Fixed, device-independent rate (Hz) at which the APU emits samples. The
@@ -740,5 +742,180 @@ impl Apu {
 impl Default for Apu {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// -- Save state -------------------------------------------------------------
+
+impl Envelope {
+    fn write_state(&self, out: &mut Vec<u8>) {
+        write_u8(out, self.start_volume);
+        write_bool(out, self.add_mode);
+        write_u8(out, self.period);
+        write_u8(out, self.volume);
+        write_u8(out, self.timer);
+    }
+
+    fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
+        self.start_volume = r.read_u8()?;
+        self.add_mode = r.read_bool()?;
+        self.period = r.read_u8()?;
+        self.volume = r.read_u8()?;
+        self.timer = r.read_u8()?;
+        Ok(())
+    }
+}
+
+impl SquareChannel {
+    fn write_state(&self, out: &mut Vec<u8>) {
+        write_bool(out, self.enabled);
+        write_bool(out, self.dac.enabled);
+        write_u8(out, self.duty);
+        write_u8(out, self.duty_pos);
+        write_u16_le(out, self.frequency);
+        write_u32_le(out, self.freq_timer);
+        write_u16_le(out, self.length_counter);
+        write_bool(out, self.length_enabled);
+        self.env.write_state(out);
+        write_bool(out, self.has_sweep);
+        write_u8(out, self.sweep_period);
+        write_bool(out, self.sweep_negate);
+        write_u8(out, self.sweep_shift);
+        write_u8(out, self.sweep_timer);
+        write_bool(out, self.sweep_enabled);
+        write_u16_le(out, self.sweep_shadow);
+    }
+
+    fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
+        self.enabled = r.read_bool()?;
+        self.dac.enabled = r.read_bool()?;
+        self.duty = r.read_u8()?;
+        self.duty_pos = r.read_u8()?;
+        self.frequency = r.read_u16_le()?;
+        self.freq_timer = r.read_u32_le()?;
+        self.length_counter = r.read_u16_le()?;
+        self.length_enabled = r.read_bool()?;
+        self.env.read_state(r)?;
+        self.has_sweep = r.read_bool()?;
+        self.sweep_period = r.read_u8()?;
+        self.sweep_negate = r.read_bool()?;
+        self.sweep_shift = r.read_u8()?;
+        self.sweep_timer = r.read_u8()?;
+        self.sweep_enabled = r.read_bool()?;
+        self.sweep_shadow = r.read_u16_le()?;
+        Ok(())
+    }
+}
+
+impl WaveChannel {
+    fn write_state(&self, out: &mut Vec<u8>) {
+        write_bool(out, self.enabled);
+        write_bool(out, self.dac.enabled);
+        write_u16_le(out, self.frequency);
+        write_u32_le(out, self.freq_timer);
+        write_u8(out, self.position);
+        write_u8(out, self.sample_buffer);
+        write_u8(out, self.volume_code);
+        write_u16_le(out, self.length_counter);
+        write_bool(out, self.length_enabled);
+        out.extend_from_slice(&self.wave_ram);
+    }
+
+    fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
+        self.enabled = r.read_bool()?;
+        self.dac.enabled = r.read_bool()?;
+        self.frequency = r.read_u16_le()?;
+        self.freq_timer = r.read_u32_le()?;
+        self.position = r.read_u8()?;
+        self.sample_buffer = r.read_u8()?;
+        self.volume_code = r.read_u8()?;
+        self.length_counter = r.read_u16_le()?;
+        self.length_enabled = r.read_bool()?;
+        self.wave_ram.copy_from_slice(r.read_exact(16)?);
+        Ok(())
+    }
+}
+
+impl NoiseChannel {
+    fn write_state(&self, out: &mut Vec<u8>) {
+        write_bool(out, self.enabled);
+        write_bool(out, self.dac.enabled);
+        write_u16_le(out, self.lfsr);
+        write_u8(out, self.clock_shift);
+        write_bool(out, self.width_7bit);
+        write_u8(out, self.divisor_code);
+        write_u32_le(out, self.freq_timer);
+        write_u16_le(out, self.length_counter);
+        write_bool(out, self.length_enabled);
+        self.env.write_state(out);
+    }
+
+    fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
+        self.enabled = r.read_bool()?;
+        self.dac.enabled = r.read_bool()?;
+        self.lfsr = r.read_u16_le()?;
+        self.clock_shift = r.read_u8()?;
+        self.width_7bit = r.read_bool()?;
+        self.divisor_code = r.read_u8()?;
+        self.freq_timer = r.read_u32_le()?;
+        self.length_counter = r.read_u16_le()?;
+        self.length_enabled = r.read_bool()?;
+        self.env.read_state(r)?;
+        Ok(())
+    }
+}
+
+impl Apu {
+    /// Append the full APU state to `out`. The `cycles_per_sample` and
+    /// `hp_factor` fields are currently computed at construction time from
+    /// the constant `OUTPUT_RATE`, but we still serialize them so the blob
+    /// stays bit-exact even if that constant ever becomes runtime-config.
+    pub fn write_state(&self, out: &mut Vec<u8>) {
+        self.ch1.write_state(out);
+        self.ch2.write_state(out);
+        self.ch3.write_state(out);
+        self.ch4.write_state(out);
+        write_bool(out, self.power);
+        write_u8(out, self.nr50);
+        write_u8(out, self.nr51);
+        write_u32_le(out, self.frame_seq_counter);
+        write_u8(out, self.frame_seq_step);
+        write_u64_le(out, self.sample_clock.to_bits());
+        write_u64_le(out, self.cycles_per_sample.to_bits());
+        write_u32_le(out, self.hp_factor.to_bits());
+        write_u32_le(out, self.hp_cap_l.to_bits());
+        write_u32_le(out, self.hp_cap_r.to_bits());
+        // Interleaved (L, R) f32 sample buffer, length-prefixed because the
+        // size depends on how long the frontend went between drains.
+        write_u32_le(out, self.buffer.len() as u32);
+        for &s in &self.buffer {
+            write_u32_le(out, s.to_bits());
+        }
+    }
+
+    pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
+        self.ch1.read_state(r)?;
+        self.ch2.read_state(r)?;
+        self.ch3.read_state(r)?;
+        self.ch4.read_state(r)?;
+        self.power = r.read_bool()?;
+        self.nr50 = r.read_u8()?;
+        self.nr51 = r.read_u8()?;
+        self.frame_seq_counter = r.read_u32_le()?;
+        self.frame_seq_step = r.read_u8()?;
+        self.sample_clock = f64::from_bits(r.read_u64_le()?);
+        self.cycles_per_sample = f64::from_bits(r.read_u64_le()?);
+        self.hp_factor = f32::from_bits(r.read_u32_le()?);
+        self.hp_cap_l = f32::from_bits(r.read_u32_le()?);
+        self.hp_cap_r = f32::from_bits(r.read_u32_le()?);
+        let n = r.read_u32_le()? as usize;
+        let bytes = r.read_exact(n * 4)?;
+        self.buffer.clear();
+        self.buffer.reserve(n);
+        for chunk in bytes.chunks_exact(4) {
+            self.buffer
+                .push(f32::from_bits(u32::from_le_bytes(chunk.try_into().unwrap())));
+        }
+        Ok(())
     }
 }

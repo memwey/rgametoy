@@ -5,6 +5,7 @@ use crate::interrupts::InterruptType;
 use crate::joypad::P1;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
+use crate::state::{write_u16_le, write_u8, Reader, SaveStateError};
 use crate::timer::Timer;
 use crate::wram::Wram;
 
@@ -204,6 +205,48 @@ impl MemoryBus {
 impl Default for MemoryBus {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// -- Save state -------------------------------------------------------------
+
+impl MemoryBus {
+    /// Append the entire bus state in the on-disk order documented in
+    /// `state.rs`. The OAM DMA triplet (`dma_remaining`, `dma_delay`,
+    /// `dma_source`) is written *before* the IF/IE registers so that a
+    /// transfer requested by a just-loaded game state resumes at the same
+    /// point in its startup delay.
+    pub fn write_state(&self, out: &mut Vec<u8>) {
+        self.cartridge.write_state(out);
+        self.wram.write_state(out);
+        self.hram.write_state(out);
+        self.p1.write_state(out);
+        self.ppu.write_state(out);
+        self.timer.write_state(out);
+        self.apu.write_state(out);
+        self.serial.write_state(out);
+        write_u16_le(out, self.dma_remaining);
+        write_u8(out, self.dma_delay);
+        write_u8(out, self.dma_source);
+        write_u8(out, self.if_register);
+        write_u8(out, self.ie_register);
+    }
+
+    pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
+        self.cartridge.read_state(r)?;
+        self.wram.read_state(r)?;
+        self.hram.read_state(r)?;
+        self.p1.read_state(r)?;
+        self.ppu.read_state(r)?;
+        self.timer.read_state(r)?;
+        self.apu.read_state(r)?;
+        self.serial.read_state(r)?;
+        self.dma_remaining = r.read_u16_le()?;
+        self.dma_delay = r.read_u8()?;
+        self.dma_source = r.read_u8()?;
+        self.if_register = r.read_u8()?;
+        self.ie_register = r.read_u8()?;
+        Ok(())
     }
 }
 

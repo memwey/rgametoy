@@ -3,6 +3,8 @@
 //! a selected counter bit ANDed with the timer-enable. This reproduces the
 //! DIV-write and TAC-change glitches and the one-M-cycle TIMA reload delay.
 
+use crate::state::{write_bool, write_u16_le, write_u8, Reader, SaveStateError};
+
 #[derive(Clone)]
 pub struct Timer {
     /// 16-bit system counter; DIV (0xFF04) is its upper byte.
@@ -176,5 +178,36 @@ impl Timer {
 impl Default for Timer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// -- Save state -------------------------------------------------------------
+
+impl Timer {
+    /// Append the timer's full state to `out` in the on-disk order
+    /// documented in `state.rs`. Counter is written before `prev_counter`
+    /// so the "DIV-write glitch" replay in `read_state` sees consistent
+    /// values.
+    pub fn write_state(&self, out: &mut Vec<u8>) {
+        write_u16_le(out, self.counter);
+        write_u16_le(out, self.prev_counter);
+        write_u8(out, self.tima);
+        write_u8(out, self.tma);
+        write_u8(out, self.tac);
+        write_bool(out, self.prev_input);
+        write_u8(out, self.reload_delay);
+        write_bool(out, self.just_reloaded);
+    }
+
+    pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
+        self.counter = r.read_u16_le()?;
+        self.prev_counter = r.read_u16_le()?;
+        self.tima = r.read_u8()?;
+        self.tma = r.read_u8()?;
+        self.tac = r.read_u8()?;
+        self.prev_input = r.read_bool()?;
+        self.reload_delay = r.read_u8()?;
+        self.just_reloaded = r.read_bool()?;
+        Ok(())
     }
 }

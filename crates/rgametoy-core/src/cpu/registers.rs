@@ -7,6 +7,8 @@
 //! *is* the data), while everything outside the `cpu` module goes through the
 //! typed accessors below (the 8-bit halves do the byte extract/insert).
 
+use crate::state::{write_u16_le, Reader, SaveStateError};
+
 #[derive(Clone)]
 pub struct Registers {
     // Accumulator and Flags
@@ -198,5 +200,30 @@ impl Registers {
 impl Default for Registers {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// -- Save state -------------------------------------------------------------
+
+impl Registers {
+    /// Append the six 16-bit pairs (12 bytes total) in the order AF, BC, DE,
+    /// HL, SP, PC.
+    pub fn write_state(&self, out: &mut Vec<u8>) {
+        write_u16_le(out, self.af);
+        write_u16_le(out, self.bc);
+        write_u16_le(out, self.de);
+        write_u16_le(out, self.hl);
+        write_u16_le(out, self.sp);
+        write_u16_le(out, self.pc);
+    }
+
+    pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
+        self.af = r.read_u16_le()?;
+        self.bc = r.read_u16_le()?;
+        self.de = r.read_u16_le()?;
+        self.hl = r.read_u16_le()?;
+        self.sp = r.read_u16_le()?;
+        self.pc = r.read_u16_le()?;
+        Ok(())
     }
 }

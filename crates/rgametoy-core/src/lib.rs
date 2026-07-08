@@ -18,12 +18,16 @@ pub mod interrupts;
 pub mod joypad;
 pub mod ppu;
 pub mod serial;
+pub mod state;
 pub mod timer;
 pub mod wram;
 
 use crate::bus::{Bus, MemoryBus};
 use crate::cartridge::Cartridge;
 use crate::cpu::Cpu;
+use crate::state::{
+    crc32, write_u32_le, write_u64_le, Reader, SaveStateError, SAVE_STATE_MAGIC, SAVE_STATE_VERSION,
+};
 
 // The Game Boy runs at 4.194304 MHz. One frame is 154 scanlines × 456 dots =
 // 70224 T-cycles.
@@ -132,6 +136,24 @@ impl Console {
         self.bus.audio_output_rate()
     }
 
+    /// Battery-backed external RAM as raw bytes (empty if the cartridge
+    /// has no external RAM). Length is `Cartridge::ram_size()` if non-zero.
+    pub fn save_ram_bytes(&self) -> Vec<u8> {
+        self.bus.cartridge().save_ram_bytes()
+    }
+
+    /// Replace the cartridge's external RAM. Silently truncates if the
+    /// supplied slice is shorter than the cartridge's RAM size.
+    pub fn load_ram_bytes(&mut self, bytes: &[u8]) {
+        self.bus.cartridge_mut().load_ram_bytes(bytes);
+    }
+
+    /// Number of bytes of external RAM the current cartridge exposes.
+    /// 0 means no battery save.
+    pub fn cartridge_ram_size(&self) -> usize {
+        self.bus.cartridge().ram().len()
+    }
+
     /// Bytes the program has printed over the serial port (test-ROM output).
     pub fn take_serial_output(&mut self) -> Vec<u8> {
         self.bus.take_serial_output()
@@ -145,6 +167,56 @@ impl Console {
     /// Restore a previously captured snapshot (instant load state).
     pub fn load_state(&mut self, state: &SaveState) {
         self.clone_from(&state.0);
+    }
+
+    /// Serialize the entire machine to a portable byte blob (magic + version
+    /// + CRC32 + per-module body). This is what gets handed to a frontend for
+    /// persistence; the in-memory `SaveState` is only useful within one
+    /// process. The on-disk layout is documented in `state.rs`.
+    pub fn save_state_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&SAVE_STATE_MAGIC);
+        out.push(SAVE_STATE_VERSION);
+        let crc_pos = out.len();
+        write_u32_le(&mut out, 0); // placeholder, filled in below
+        let body_start = out.len();
+
+        write_u64_le(&mut out, self.total_cycles);
+        self.cpu.write_state(&mut out);
+        self.bus.write_state(&mut out);
+
+        let crc = crc32(&out[body_start..]);
+        out[crc_pos..crc_pos + 4].copy_from_slice(&crc.to_le_bytes());
+        out
+    }
+
+    /// Restore a machine from a `save_state_bytes` blob. The CRC32 is
+    /// verified against the payload before any state is applied, so a
+    /// corrupt blob never partially overwrites a running session. The
+    /// cartridge's ROM is *not* part of the blob — the same ROM must be
+    /// loaded into the console (via [`Console::load_cartridge`]) before
+    /// calling this, so the cartridge's `ram` size matches the snapshot.
+    pub fn load_state_bytes(&mut self, bytes: &[u8]) -> Result<(), SaveStateError> {
+        if bytes.len() < SAVE_STATE_MAGIC.len() + 1 + 4 {
+            return Err(SaveStateError::Truncated);
+        }
+        if &bytes[0..4] != SAVE_STATE_MAGIC {
+            return Err(SaveStateError::BadMagic);
+        }
+        let version = bytes[4];
+        if version != SAVE_STATE_VERSION {
+            return Err(SaveStateError::UnsupportedVersion(version));
+        }
+        let crc = u32::from_le_bytes(bytes[5..9].try_into().unwrap());
+        let payload = &bytes[9..];
+        if crc32(payload) != crc {
+            return Err(SaveStateError::CrcMismatch);
+        }
+        let mut r = Reader::new(payload);
+        self.total_cycles = r.read_u64_le()?;
+        self.cpu.read_state(&mut r)?;
+        self.bus.read_state(&mut r)?;
+        Ok(())
     }
 
     /// Update the joypad button state (0 = pressed). The joypad hardware raises

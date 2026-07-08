@@ -1,4 +1,5 @@
 use crate::bus::Bus;
+use crate::state::{write_bool, write_u8, Reader, SaveStateError};
 
 pub mod registers;
 
@@ -363,5 +364,33 @@ impl Cpu {
 impl Default for Cpu {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// -- Save state -------------------------------------------------------------
+
+impl Cpu {
+    /// Append the CPU state: 12 bytes of registers, then six flag/control
+    /// bytes (`ime`, `ime_pending`, `halted`, `halt_bug`, `locked`,
+    /// `cycles`). Order must match [`Self::read_state`].
+    pub fn write_state(&self, out: &mut Vec<u8>) {
+        self.registers.write_state(out);
+        write_bool(out, self.ime);
+        write_bool(out, self.ime_pending);
+        write_bool(out, self.halted);
+        write_bool(out, self.halt_bug);
+        write_bool(out, self.locked);
+        write_u8(out, self.cycles);
+    }
+
+    pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
+        self.registers.read_state(r)?;
+        self.ime = r.read_bool()?;
+        self.ime_pending = r.read_bool()?;
+        self.halted = r.read_bool()?;
+        self.halt_bug = r.read_bool()?;
+        self.locked = r.read_bool()?;
+        self.cycles = r.read_u8()?;
+        Ok(())
     }
 }

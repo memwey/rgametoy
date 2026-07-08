@@ -34,3 +34,6 @@ target
 *.gbc
 *.sav
 *.bmp
+
+# Trunk build output for the web crate
+crates/rgametoy-web/dist/

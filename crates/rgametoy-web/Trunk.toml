@@ -1,0 +1,11 @@
+# Trunk config for the rgametoy-web crate. Run `trunk serve` for development
+# (default http://localhost:8080) and `trunk build --release` to produce the
+# static bundle under `dist/`.
+
+[build]
+target = "index.html"
+dist = "dist"
+
+[serve]
+port = 8080
+addresses = ["0.0.0.0"]
