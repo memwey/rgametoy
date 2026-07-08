@@ -19,7 +19,7 @@ use web_sys::{
 
 use crate::audio::AudioPlayer;
 use crate::canvas::{get_canvas, get_element_by_id, Presenter, RGBA_LEN};
-use crate::input::{from_keydown, InputState};
+use crate::input::{from_keydown, InputState, TURBO_KEY};
 use crate::pacing::{frames_to_run, DMG_FRAME_MS, MAX_CATCHUP_MS};
 use crate::palette::{rgba_table, shade_to_rgba, PALETTES};
 use crate::rom::{cartridge_title, load_rom};
@@ -323,33 +323,39 @@ impl Inner {
         });
     }
 
-    /// Apply a keydown event: track the key and queue any edge-detected
-    /// meta action. `Tab` (turbo) and the digit meta keys never reach the
-    /// browser, so we `prevent_default()` to keep the page from scrolling
-    /// on Space/etc.
+    /// Apply a keydown event: swallow the browser's default for any key the
+    /// emulator uses, then track it and queue any edge-detected meta action.
     fn on_keydown(&mut self, ev: &KeyboardEvent) {
         let code = ev.code();
-        // Don't let key autorepeat re-trigger the meta edges: only the
-        // *first* keydown of a save/load/screenshot/palette press acts.
-        let was_down = !self.keys_down.insert(code.clone());
-        if was_down {
-            return;
-        }
         let s: InputState = from_keydown(&code);
-        if s.save {
-            self.save_pending = true;
-        }
-        if s.load {
-            self.load_pending = true;
-        }
-        if s.screenshot {
-            self.screenshot_pending = true;
-        }
-        if s.palette_cycle {
-            self.palette_pending = true;
-        }
-        if s.turbo || s.save || s.load || s.screenshot || s.palette_cycle {
+        // Keep the browser from *also* acting on a key we consume — arrows and
+        // Space would scroll, the meta digits would type. Done on every keydown
+        // (including autorepeat) so a held key never leaks a default action.
+        // Unmapped keys (Tab, F5, …) fall through to the browser untouched.
+        let handled = s.buttons != 0xFF
+            || s.turbo
+            || s.save
+            || s.load
+            || s.screenshot
+            || s.palette_cycle;
+        if handled {
             ev.prevent_default();
+        }
+        // Edge-detect the meta keys off the *first* keydown only; autorepeat
+        // (key already in the set) must not re-fire save/load/etc.
+        if self.keys_down.insert(code) {
+            if s.save {
+                self.save_pending = true;
+            }
+            if s.load {
+                self.load_pending = true;
+            }
+            if s.screenshot {
+                self.screenshot_pending = true;
+            }
+            if s.palette_cycle {
+                self.palette_pending = true;
+            }
         }
     }
 
@@ -424,7 +430,7 @@ impl Inner {
         self.apply_input();
         if !self.paused && self.has_rom && !self.audio_enabled {
             let now = js_sys::Date::now();
-            if self.keys_down.contains("Tab") {
+            if self.keys_down.contains(TURBO_KEY) {
                 // Fast-forward: a fixed burst per tick. Reset the accumulator
                 // so releasing turbo doesn't leave a backlog to replay.
                 for _ in 0..TURBO_FRAMES_PER_TICK {

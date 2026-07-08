@@ -33,9 +33,16 @@ const KEY_MAP: &[(&str, u8)] = &[
     ("ArrowDown", DOWN),
     ("KeyZ", A),
     ("KeyX", B),
-    ("Backspace", SELECT),
+    ("ShiftRight", SELECT),
     ("Enter", START),
 ];
+
+/// Host `event.code` for fast-forward (held). `Space`, not `Tab`: Tab is the
+/// browser's focus-navigation key and fights us on the web even with
+/// `preventDefault`; Space is free (no button maps to it) and safe once its
+/// default is prevented. Public so the rAF loop can test it against the live
+/// key set.
+pub const TURBO_KEY: &str = "Space";
 
 /// A frame's worth of decoded host input.
 #[derive(Default, Clone, Copy, Debug)]
@@ -70,7 +77,7 @@ pub fn from_keydown(code: &str) -> InputState {
             state.buttons &= !bit;
         }
     }
-    state.turbo = code == "Tab";
+    state.turbo = code == TURBO_KEY;
     state.save = code == "Digit5";
     state.load = code == "Digit7";
     state.screenshot = code == "Digit2";
@@ -91,9 +98,11 @@ mod tests {
     }
 
     #[test]
-    fn zxa_clear_action_buttons() {
+    fn action_and_select_start_clear_their_bits() {
         assert_eq!(from_keydown("KeyZ").buttons, !A);
         assert_eq!(from_keydown("KeyX").buttons, !B);
+        assert_eq!(from_keydown("ShiftRight").buttons, !SELECT);
+        assert_eq!(from_keydown("Enter").buttons, !START);
     }
 
     #[test]
@@ -104,7 +113,13 @@ mod tests {
         assert!(!from_keydown("Digit7").save);
         assert!(from_keydown("Digit2").screenshot);
         assert!(from_keydown("Digit3").palette_cycle);
-        assert!(from_keydown("Tab").turbo);
+    }
+
+    #[test]
+    fn space_is_fast_forward_not_tab() {
+        assert!(from_keydown(TURBO_KEY).turbo);
+        assert!(from_keydown("Space").turbo);
+        assert!(!from_keydown("Tab").turbo);
     }
 
     #[test]

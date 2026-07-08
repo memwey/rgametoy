@@ -212,17 +212,19 @@ debounce 120 帧 ≈ 2 秒。
 
 ## 7. 输入映射
 
-与 desktop `input.rs` 完全一致:
+方向 / A / B / Start 同 desktop;Select、快进、以及存读档/截图/调色板热键为 web 专用(避开浏览器占用的键):
 
 | Host `KeyboardEvent.code` | Game Boy 位 |
 |---|---|
 | `ArrowRight` / `ArrowLeft` / `ArrowUp` / `ArrowDown` | D-pad |
 | `KeyZ` / `KeyX` | A / B |
-| `Enter` / `Backspace` | Start / Select |
-| `Tab` | Turbo(按住) |
+| `Enter` / `ShiftRight` | Start / Select |
+| `Space` | 快进(按住) |
 | `Digit5` / `Digit7` | 即时存 / 读 |
 | `Digit2` | 截图下载 |
 | `Digit3` | 切调色板 |
+
+`Space`(而非 `Tab`)做快进:`Tab` 是浏览器焦点切换键,即使 `preventDefault` 也别扭。凡是模拟器要用的键,`on_keydown` 每次(含自动重复)都 `preventDefault`,防止方向键/空格滚动页面;未映射的键(`Tab`、`F5`…)照常交给浏览器。
 
 位掩码定义从 desktop 复制一份(就 8 个 const,简单)。
 
