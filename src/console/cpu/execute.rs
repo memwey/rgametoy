@@ -206,8 +206,11 @@ impl Cpu {
             0xFE => { let v = self.fetch_byte(bus); self.cp_a(v); }
             0xFF => self.call(bus, 0x38),
 
-            // Illegal / unused opcodes lock up real hardware; treat as no-ops.
-            0xD3 | 0xDB | 0xDD | 0xE3 | 0xE4 | 0xEB | 0xEC | 0xED | 0xF4 | 0xFC | 0xFD => {}
+            // Illegal / unused opcodes hang the CPU on real hardware: it stops
+            // fetching and only a reset recovers. Model that lock-up.
+            0xD3 | 0xDB | 0xDD | 0xE3 | 0xE4 | 0xEB | 0xEC | 0xED | 0xF4 | 0xFC | 0xFD => {
+                self.locked = true;
+            }
         }
     }
 }

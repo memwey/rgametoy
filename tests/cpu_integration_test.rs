@@ -66,6 +66,29 @@ fn test_ie_push_reevaluates_the_interrupt_vector() {
     );
 }
 
+/// An illegal opcode hangs the CPU: it stops advancing and no longer services
+/// interrupts (on real hardware only a reset recovers).
+#[test]
+fn test_illegal_opcode_locks_up_the_cpu() {
+    let mut console = Console::new();
+    console.load_program(&[0x00, 0xD3, 0x3C]); // NOP; illegal 0xD3; INC A (never runs)
+    console.step(); // NOP
+    console.step(); // 0xD3 → lock
+    let pc = console.get_cpu().get_pc();
+
+    // A pending, enabled interrupt must not wake a locked CPU (unlike HALT).
+    console.get_bus_mut().write_byte(0xFFFF, 0x01); // IE: VBlank
+    console.get_bus_mut().write_byte(0xFF0F, 0x01); // IF: VBlank pending
+    console.get_cpu_mut().enable_interrupts();
+
+    for _ in 0..100 {
+        console.step();
+    }
+    assert_eq!(console.get_cpu().get_pc(), pc, "PC frozen after the illegal opcode");
+    assert_eq!(console.get_cpu().get_registers().get_a(), 0, "the following INC A never ran");
+    assert_ne!(console.get_cpu().get_pc(), 0x0040, "a locked CPU ignores interrupts");
+}
+
 #[test]
 fn test_add_hl_bc_instruction() {
     // Test case 1: No carry, no half-carry

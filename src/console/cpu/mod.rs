@@ -32,6 +32,10 @@ pub struct Cpu {
     /// Set when the "halt bug" is triggered: the byte following `HALT` is
     /// fetched without advancing the program counter, so it is executed twice.
     halt_bug: bool,
+    /// Set when an illegal opcode hangs the CPU. Unlike `HALT` this never
+    /// resumes (only a reset recovers on real hardware): the CPU stops fetching
+    /// and ignores interrupts.
+    locked: bool,
     /// T-cycles consumed by the current step (accrued as the machine ticks).
     cycles: u8,
 }
@@ -44,6 +48,7 @@ impl Cpu {
             ime_pending: false,
             halted: false,
             halt_bug: false,
+            locked: false,
             cycles: 0,
         }
     }
@@ -109,6 +114,15 @@ impl Cpu {
     /// T-cycles consumed.
     pub fn step(&mut self, bus: &mut impl Bus) -> u8 {
         self.cycles = 0;
+
+        // An illegal opcode has hung the CPU: it no longer fetches or responds
+        // to interrupts. The master clock keeps running, so keep ticking the
+        // rest of the machine — the PPU re-renders its frozen state and the
+        // frame loop still advances (the game is simply stuck).
+        if self.locked {
+            self.tick(bus);
+            return self.cycles;
+        }
 
         // Capture whether an `EI` from the *previous* instruction is waiting to
         // take effect. Its `IME` promotion happens after this instruction runs,
