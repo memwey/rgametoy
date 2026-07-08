@@ -17,6 +17,15 @@ mod ui;
 mod wasm_host;
 mod weblog;
 
+/// Internal surface re-exported only for the browser-integration tests in
+/// `tests/web.rs`. Not a supported API; nothing in the shipped `.wasm` calls
+/// it, so it's dead-code-eliminated from the cdylib.
+#[doc(hidden)]
+pub mod test_support {
+    pub use crate::canvas::{present, SCREEN_H, SCREEN_W};
+    pub use crate::storage::{js_to_record, record_to_js, SaveRecord};
+}
+
 pub use wasm_host::WasmHost;
 
 /// Wasm entry point. Trunk (via the `data-trunk` glue in `index.html`) loads

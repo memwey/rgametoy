@@ -233,7 +233,7 @@ pub fn put_record_async(db: &Option<IdbDatabase>, record: SaveRecord) {
 
 // -- JS <-> Rust conversion ------------------------------------------------
 
-fn record_to_js(r: &SaveRecord) -> JsValue {
+pub fn record_to_js(r: &SaveRecord) -> JsValue {
     let obj = js_sys::Object::new();
     let _ = js_sys::Reflect::set(
         &obj,
@@ -271,7 +271,7 @@ fn record_to_js(r: &SaveRecord) -> JsValue {
     obj.into()
 }
 
-fn js_to_record(v: &JsValue) -> Result<Option<SaveRecord>, JsValue> {
+pub fn js_to_record(v: &JsValue) -> Result<Option<SaveRecord>, JsValue> {
     let hash = reflect_string(v, "romHash")?;
     let title = reflect_string(v, "romTitle").unwrap_or_default();
     let updated = js_sys::Reflect::get(v, &JsValue::from_str("updatedAt"))
