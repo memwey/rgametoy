@@ -9,6 +9,52 @@ fn enabled_ppu() -> Ppu {
     ppu
 }
 
+/// Measure the length of mode 3 on line 2 (a normal line — line 0 after enable
+/// is special), by watching the OAM-scan→drawing and drawing→HBlank edges.
+fn mode3_len_on_line2(ppu: &mut Ppu) -> u32 {
+    while ppu.ly != 2 {
+        ppu.tick(1);
+    }
+    let (mut start, mut dot, mut len) = (0u32, 0u32, 0u32);
+    while ppu.ly == 2 {
+        let mode = ppu.get_mode();
+        ppu.tick(1);
+        dot += 1;
+        if mode == PpuMode::OamScan && ppu.get_mode() == PpuMode::Drawing {
+            start = dot;
+        }
+        if mode == PpuMode::Drawing && ppu.get_mode() == PpuMode::HBlank {
+            len = dot - start;
+        }
+    }
+    len
+}
+
+/// Mode-3 length on line 2 with the given sprite OAM X positions (all at Y=18,
+/// i.e. screen line 2), sprites enabled.
+fn mode3_len_with_sprites(sprite_xs: &[u8]) -> u32 {
+    let mut ppu = Ppu::new();
+    for (i, &x) in sprite_xs.iter().enumerate() {
+        let base = 0xFE00 + i as u16 * 4;
+        ppu.write_oam(base, 18); // Y=18 -> screen line 2
+        ppu.write_oam(base + 1, x);
+        ppu.write_oam(base + 2, 0);
+        ppu.write_oam(base + 3, 0);
+    }
+    ppu.write_register(0xFF40, if sprite_xs.is_empty() { 0x91 } else { 0x93 });
+    mode3_len_on_line2(&mut ppu)
+}
+
+/// Render one full frame (drive line by line until frame-ready).
+fn render_frame(ppu: &mut Ppu) {
+    for _ in 0..2000 {
+        ppu.tick(200);
+        if ppu.take_frame_ready() {
+            break;
+        }
+    }
+}
+
 /// #2 regression: `tick` advances one PPU dot per T-cycle (no ×4). OAM scan
 /// (mode 2) lasts exactly 80 dots.
 #[test]
@@ -65,40 +111,190 @@ fn ppu_first_line_after_enable_is_short_and_skips_oam_scan() {
 /// `intr_2_mode0_timing_sprites`).
 #[test]
 fn ppu_stacked_sprite_penalty_aggregates() {
-    // Measure mode-3 length on line 2 (a normal line) with the given sprite Xs.
-    fn mode3_len(sprite_xs: &[u8]) -> u32 {
-        let mut ppu = Ppu::new();
-        for (i, &x) in sprite_xs.iter().enumerate() {
-            let base = 0xFE00 + i as u16 * 4;
-            ppu.write_oam(base, 18); // Y=18 -> screen line 2
-            ppu.write_oam(base + 1, x);
-            ppu.write_oam(base + 2, 0);
-            ppu.write_oam(base + 3, 0);
-        }
-        let lcdc = if sprite_xs.is_empty() { 0x91 } else { 0x93 };
-        ppu.write_register(0xFF40, lcdc);
-        while ppu.ly != 2 {
-            ppu.tick(1);
-        }
-        let (mut start, mut dot, mut len) = (0u32, 0u32, 0u32);
-        while ppu.ly == 2 {
-            let mode = ppu.get_mode();
-            ppu.tick(1);
-            dot += 1;
-            if mode == PpuMode::OamScan && ppu.get_mode() == PpuMode::Drawing {
-                start = dot;
-            }
-            if mode == PpuMode::Drawing && ppu.get_mode() == PpuMode::HBlank {
-                len = dot - start;
-            }
-        }
-        len
-    }
+    assert_eq!(mode3_len_with_sprites(&[]), 172, "baseline mode 3 is 172 dots");
+    assert_eq!(mode3_len_with_sprites(&[0]), 183, "one X=0 sprite adds the full 11");
+    assert_eq!(
+        mode3_len_with_sprites(&[0, 0]),
+        189,
+        "a second stacked sprite adds only 6"
+    );
+    assert_eq!(
+        mode3_len_with_sprites(&[0, 0, 0]),
+        195,
+        "a third stacked sprite adds only 6"
+    );
+}
 
-    assert_eq!(mode3_len(&[]), 172, "baseline mode 3 is 172 dots");
-    assert_eq!(mode3_len(&[0]), 183, "one X=0 sprite adds the full 11");
-    assert_eq!(mode3_len(&[0, 0]), 189, "a second stacked sprite adds only 6");
-    assert_eq!(mode3_len(&[0, 0, 0]), 195, "a third stacked sprite adds only 6");
+/// Mode 3 stretches by the SCX fine-scroll discard: its length is
+/// 172 + (SCX & 7) dots (mooneye `intr_2_mode3_timing` / `hblank_ly_scx`).
+#[test]
+fn ppu_mode3_grows_with_scx_fine_scroll() {
+    for scx in [0u8, 1, 3, 5, 7] {
+        let mut ppu = Ppu::new();
+        ppu.write_register(0xFF43, scx);
+        ppu.write_register(0xFF40, 0x91);
+        assert_eq!(
+            mode3_len_on_line2(&mut ppu),
+            172 + (scx & 7) as u32,
+            "SCX={} fine scroll stretches mode 3",
+            scx
+        );
+    }
+}
+
+/// At most 10 sprites are selected per line, so an 11th stacked sprite adds no
+/// further mode-3 penalty (mooneye `intr_2_..._sprites`, 10-sprite cap).
+#[test]
+fn ppu_selects_at_most_10_sprites_per_line() {
+    let ten = mode3_len_with_sprites(&[0; 10]);
+    let eleven = mode3_len_with_sprites(&[0; 11]);
+    assert_eq!(ten, 172 + 11 + 6 * 9, "10 stacked sprites: 11 + 6*9");
+    assert_eq!(eleven, ten, "the 11th sprite is dropped (10-per-line cap)");
+}
+
+/// The STAT mode bits (and the OAM/VRAM lock release) lag the internal mode
+/// transition by 4 dots out of a scan/blank mode (mooneye `intr_2_mode0/3`).
+#[test]
+fn ppu_stat_mode_bits_lag_the_internal_transition() {
+    let mut ppu = enabled_ppu();
+    while ppu.ly != 2 {
+        ppu.tick(1);
+    }
+    ppu.tick(80); // internal OAM-scan -> drawing happens on this dot
+    assert_eq!(ppu.get_mode(), PpuMode::Drawing, "internal mode is drawing");
+    assert_eq!(
+        ppu.read_register(0xFF41) & 3,
+        2,
+        "STAT still reads mode 2 for a few dots after the transition"
+    );
+    ppu.tick(4);
+    assert_eq!(
+        ppu.read_register(0xFF41) & 3,
+        3,
+        "STAT catches up to mode 3 after the 4-dot lag"
+    );
+}
+
+/// The LY==LYC coincidence sets STAT bit 2 and, with the source enabled, raises
+/// a STAT interrupt on the rising edge (mooneye `intr_1_2_timing`, `stat_lyc`).
+#[test]
+fn ppu_lyc_coincidence_sets_stat_bit_and_interrupts() {
+    let mut ppu = enabled_ppu();
+    ppu.write_register(0xFF45, 5); // LYC = 5
+    ppu.write_register(0xFF41, 0x40); // enable the LYC=LY STAT source
+    while ppu.ly != 5 {
+        ppu.tick(1);
+    }
+    let mut saw_int = false;
+    for _ in 0..8 {
+        // The coincidence latches a few dots into the line.
+        if ppu.tick(1) & 0x02 != 0 {
+            saw_int = true;
+        }
+    }
+    assert_eq!(
+        ppu.read_register(0xFF41) & 0x04,
+        0x04,
+        "coincidence bit set while LY == LYC"
+    );
+    assert!(saw_int, "a STAT interrupt fired on the LY==LYC rising edge");
+}
+
+/// OAM is locked during modes 2 and 3; VRAM is locked only during mode 3.
+#[test]
+fn ppu_locks_oam_in_scan_and_draw_and_vram_in_draw() {
+    let mut ppu = Ppu::new(); // LCD off: free access to seed sentinels
+    ppu.write_vram(0x8000, 0x42);
+    ppu.write_oam(0xFE00, 0x42);
+    ppu.write_register(0xFF40, 0x80); // LCD on
+
+    while ppu.ly != 2 {
+        ppu.tick(1);
+    }
+    ppu.tick(40); // mode 2 (OAM scan)
+    assert_eq!(ppu.read_oam(0xFE00), 0xFF, "OAM locked during scan");
+    assert_eq!(ppu.read_vram(0x8000), 0x42, "VRAM free during scan");
+
+    ppu.tick(110); // dot 150: mode 3 (drawing)
+    assert_eq!(ppu.read_oam(0xFE00), 0xFF, "OAM locked during drawing");
+    assert_eq!(ppu.read_vram(0x8000), 0xFF, "VRAM locked during drawing");
+
+    ppu.tick(250); // dot 400: mode 0 (HBlank)
+    assert_eq!(ppu.read_oam(0xFE00), 0x42, "OAM free in HBlank");
+    assert_eq!(ppu.read_vram(0x8000), 0x42, "VRAM free in HBlank");
+}
+
+/// When two opaque sprites overlap, the one with the lower OAM index wins on
+/// DMG (drawn first, and later sprites fill only still-transparent pixels).
+#[test]
+fn ppu_lower_oam_index_wins_on_sprite_overlap() {
+    let mut ppu = Ppu::new();
+    // Tile 2 = solid colour 1 (low plane 1s), tile 3 = solid colour 2 (high plane 1s).
+    for row in 0..8 {
+        ppu.write_vram(0x8020 + row * 2, 0xFF);
+        ppu.write_vram(0x8020 + row * 2 + 1, 0x00);
+        ppu.write_vram(0x8030 + row * 2, 0x00);
+        ppu.write_vram(0x8030 + row * 2 + 1, 0xFF);
+    }
+    // Both sprites at the same spot (screen 0,0). OAM 0 uses tile 2, OAM 1 tile 3.
+    ppu.write_oam(0xFE00, 16);
+    ppu.write_oam(0xFE01, 8);
+    ppu.write_oam(0xFE02, 2);
+    ppu.write_oam(0xFE03, 0x00);
+    ppu.write_oam(0xFE04, 16);
+    ppu.write_oam(0xFE05, 8);
+    ppu.write_oam(0xFE06, 3);
+    ppu.write_oam(0xFE07, 0x00);
+    ppu.write_register(0xFF48, 0xE4); // OBP0 identity
+    ppu.write_register(0xFF40, 0x93);
+
+    render_frame(&mut ppu);
+    assert_eq!(
+        ppu.framebuffer()[0],
+        1,
+        "sprite 0 (lower OAM index, colour 1) wins over sprite 1"
+    );
+}
+
+/// A sprite with attribute bit 4 set uses OBP1 instead of OBP0.
+#[test]
+fn ppu_sprite_uses_obp1_when_attr_bit4_set() {
+    let mut ppu = Ppu::new();
+    for row in 0..8 {
+        ppu.write_vram(0x8020 + row * 2, 0xFF); // tile 2: solid colour 3
+        ppu.write_vram(0x8020 + row * 2 + 1, 0xFF);
+    }
+    ppu.write_oam(0xFE00, 16);
+    ppu.write_oam(0xFE01, 8);
+    ppu.write_oam(0xFE02, 2);
+    ppu.write_oam(0xFE03, 0x10); // attr bit 4 -> OBP1
+    ppu.write_register(0xFF48, 0xFF); // OBP0: colour 3 -> shade 3
+    ppu.write_register(0xFF49, 0x40); // OBP1: colour 3 -> shade 1
+    ppu.write_register(0xFF40, 0x93);
+
+    render_frame(&mut ppu);
+    assert_eq!(ppu.framebuffer()[0], 1, "sprite honoured OBP1, not OBP0");
+}
+
+/// LCDC bit 0 clear disables the background on DMG: it reads as colour 0
+/// regardless of the tile data underneath.
+#[test]
+fn ppu_bg_disabled_forces_colour_0() {
+    let mut ppu = Ppu::new();
+    for row in 0..8 {
+        ppu.write_vram(0x8010 + row * 2, 0xFF); // tile 1: solid colour 3
+        ppu.write_vram(0x8010 + row * 2 + 1, 0xFF);
+    }
+    ppu.write_vram(0x9800, 0x01); // map (0,0) -> tile 1
+    ppu.write_register(0xFF47, 0xE4); // BGP identity
+    ppu.write_register(0xFF40, 0x90); // LCD on, tile data 0x8000, BG OFF (bit 0 = 0)
+
+    render_frame(&mut ppu);
+    assert_eq!(
+        ppu.framebuffer()[0],
+        0,
+        "BG disabled blanks to colour 0 -> shade 0"
+    );
 }
 
 /// A window positioned with WX < 7 has its left edge off-screen, so its first

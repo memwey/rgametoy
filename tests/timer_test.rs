@@ -32,6 +32,90 @@ fn tima_increments_at_the_selected_frequency() {
     assert_eq!(t.read_register(0xFF05), 2);
 }
 
+// The four TAC frequencies select counter bits 9/3/5/7, so TIMA ticks every
+// 1024 / 16 / 64 / 256 T-cycles (mooneye tim00/01/10/11).
+#[test]
+fn tima_frequency_00_ticks_every_1024_cycles() {
+    let mut t = Timer::new();
+    t.write_register(0xFF07, 0x04); // enable, freq 00
+    for _ in 0..5 {
+        t.tick(200); // 1000 T
+    }
+    assert_eq!(t.read_register(0xFF05), 0, "no tick before 1024 T");
+    t.tick(24); // 1024 T total
+    assert_eq!(t.read_register(0xFF05), 1);
+}
+
+#[test]
+fn tima_frequency_10_ticks_every_64_cycles() {
+    let mut t = Timer::new();
+    t.write_register(0xFF07, 0x06); // enable, freq 10
+    t.tick(63);
+    assert_eq!(t.read_register(0xFF05), 0);
+    t.tick(1); // 64 T
+    assert_eq!(t.read_register(0xFF05), 1);
+}
+
+#[test]
+fn tima_frequency_11_ticks_every_256_cycles() {
+    let mut t = Timer::new();
+    t.write_register(0xFF07, 0x07); // enable, freq 11
+    t.tick(200);
+    t.tick(55);
+    assert_eq!(t.read_register(0xFF05), 0);
+    t.tick(1); // 256 T
+    assert_eq!(t.read_register(0xFF05), 1);
+}
+
+/// A TIMA write in the 1-M-cycle delay after an overflow (before the reload)
+/// lands and cancels the pending reload (mooneye `tima_write_reloading`).
+#[test]
+fn tima_write_during_the_reload_delay_cancels_the_reload() {
+    let mut t = Timer::new();
+    t.write_register(0xFF06, 0x42); // TMA
+    t.write_register(0xFF05, 0xFF); // TIMA about to overflow
+    t.write_register(0xFF07, 0x05); // enable, every 16 T
+
+    t.tick(16); // overflow -> reload pending
+    t.write_register(0xFF05, 0x50); // write during the delay: cancels reload
+    t.tick(8);
+    assert_eq!(
+        t.read_register(0xFF05),
+        0x50,
+        "the written value survives; no reload from TMA"
+    );
+}
+
+/// A TIMA write on the exact reload cycle is ignored — the TMA reload wins
+/// (mooneye `tima_write_reloading`).
+#[test]
+fn tima_write_on_the_reload_cycle_is_ignored() {
+    let mut t = Timer::new();
+    t.write_register(0xFF06, 0x42); // TMA
+    t.write_register(0xFF05, 0xFF); // TIMA
+    t.write_register(0xFF07, 0x05); // enable, every 16 T
+
+    t.tick(16); // overflow
+    t.tick(4); // reload cycle: TIMA <- TMA
+    t.write_register(0xFF05, 0x99); // ignored: reload wins
+    assert_eq!(t.read_register(0xFF05), 0x42);
+}
+
+/// A TMA write before the reload changes the value TIMA reloads to
+/// (mooneye `tma_write_reloading`).
+#[test]
+fn tma_write_before_the_reload_changes_the_reloaded_value() {
+    let mut t = Timer::new();
+    t.write_register(0xFF06, 0x42); // TMA
+    t.write_register(0xFF05, 0xFF);
+    t.write_register(0xFF07, 0x05);
+
+    t.tick(16); // overflow
+    t.write_register(0xFF06, 0x77); // new TMA, before the reload
+    t.tick(4); // reload uses the new TMA
+    assert_eq!(t.read_register(0xFF05), 0x77);
+}
+
 #[test]
 fn disabled_timer_does_not_increment_tima() {
     let mut t = Timer::new();
