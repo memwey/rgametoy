@@ -378,12 +378,23 @@ impl Ppu {
             return;
         }
 
-        // A sprite at this X pauses output while it is fetched.
+        // A sprite at this X pauses output while it is fetched. The penalty is
+        // 6-11 dots: the fetch plus a wait for the background fetcher, which
+        // depends on the sprite's alignment within the tile under it —
+        // `11 - min(5, (x + SCX) mod 8)`, and X=0 always costs the full 11.
         if self.lcdc & 0x02 != 0 {
             if let Some(slot) = self.sprite_at(self.draw_x) {
                 self.sprite_index = slot;
                 self.sprite_fetched[slot] = true;
-                self.sprite_delay = 6;
+                let obj_x = self.oam[self.line_sprites[slot] as usize * 4 + 1];
+                let penalty = if obj_x == 0 {
+                    11
+                } else {
+                    11 - ((obj_x as u16 + self.scx as u16) % 8).min(5) as u8
+                };
+                // The pause spans `penalty` dots; our trigger + merge dots
+                // already cost 2, so hold for the remainder.
+                self.sprite_delay = penalty - 2;
                 return;
             }
         }

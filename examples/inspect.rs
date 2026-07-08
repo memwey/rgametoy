@@ -85,9 +85,33 @@ fn main() {
                 c.step();
             }
         }
+        "oamat" => {
+            // Break at a PC (optionally when LY matches), then dump OAM.
+            let pc = hex(&args[3]);
+            let want_ly: Option<u8> = args.get(4).and_then(|s| s.parse().ok());
+            let mut c = load();
+            if c.run_until(20_000_000, |c| {
+                c.get_cpu().get_pc() == pc && want_ly.map_or(true, |ly| c.peek(0xFF44) == ly)
+            }) {
+                let s = c.snapshot();
+                println!("at PC {:04X}, LY={} SCX={}:", pc, s.ly, c.peek(0xFF43));
+                for i in 0..40u16 {
+                    let y = c.peek(0xFE00 + i * 4);
+                    let x = c.peek(0xFE00 + i * 4 + 1);
+                    if y != 0 && y != 255 {
+                        println!("  obj{:>2}: Y={:>3} X={:>3}", i, y, x);
+                    }
+                }
+            }
+        }
         "oam" => {
             let mut c = load();
-            let on_screen = |c: &Console| (0..40).any(|i| c.peek(0xFE00 + i * 4) != 255);
+            let on_screen = |c: &Console| {
+                (0..40).any(|i| {
+                    let y = c.peek(0xFE00 + i * 4);
+                    (16..160).contains(&y)
+                })
+            };
             if c.run_until(20_000_000, on_screen) {
                 let s = c.snapshot();
                 println!("LY={} — on-screen OAM entries (Y,X,tile,attr):", s.ly);
