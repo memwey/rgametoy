@@ -1,6 +1,8 @@
 //! Game Boy cartridge: ROM, optional battery-backed RAM and a memory bank
 //! controller (MBC). Supports no-MBC (32KB), MBC1, MBC3 (no RTC) and MBC5.
 
+use std::sync::Arc;
+
 const ROM_BANK_SIZE: usize = 0x4000; // 16 KB
 const RAM_BANK_SIZE: usize = 0x2000; // 8 KB
 
@@ -14,7 +16,10 @@ enum MbcKind {
 
 #[derive(Clone)]
 pub struct Cartridge {
-    rom: Vec<u8>,
+    /// The ROM image. Shared (`Arc`) because it is read-only at runtime, so
+    /// cloning a cartridge — e.g. for an instant save state — doesn't copy the
+    /// (up to several MB) ROM; only the small mutable state below is duplicated.
+    rom: Arc<Vec<u8>>,
     ram: Vec<u8>,
     kind: MbcKind,
     /// Whether the cartridge has battery-backed RAM (persistent save data).
@@ -34,7 +39,7 @@ impl Cartridge {
     /// inject a small program with [`Cartridge::load`]).
     pub fn new() -> Cartridge {
         Cartridge {
-            rom: vec![0; ROM_BANK_SIZE * 2],
+            rom: Arc::new(vec![0; ROM_BANK_SIZE * 2]),
             ram: Vec::new(),
             kind: MbcKind::None,
             has_battery: false,
@@ -81,7 +86,7 @@ impl Cartridge {
         }
 
         Cartridge {
-            rom,
+            rom: Arc::new(rom),
             ram: vec![0; ram_size],
             kind,
             has_battery,
@@ -123,10 +128,11 @@ impl Cartridge {
     /// Overwrite the start of ROM bank 0 with `program`. Used to inject small
     /// test programs; real ROMs come through [`Cartridge::from_bytes`].
     pub fn load(&mut self, program: &[u8]) {
-        if program.len() > self.rom.len() {
-            self.rom.resize(program.len(), 0);
+        let rom = Arc::make_mut(&mut self.rom);
+        if program.len() > rom.len() {
+            rom.resize(program.len(), 0);
         }
-        self.rom[..program.len()].copy_from_slice(program);
+        rom[..program.len()].copy_from_slice(program);
     }
 
     /// ASCII title from the cartridge header (0x0134..0x0143).
@@ -232,7 +238,11 @@ impl Cartridge {
         (bank & self.rom_bank_mask()).max(if self.kind == MbcKind::Mbc5 { 0 } else { 1 })
     }
 
-    /// Mask of valid bank numbers, derived from the ROM size.
+    /// Mask of valid bank numbers, derived from the ROM size. Real cartridges
+    /// are power-of-two sized; for the rare odd size this rounds *up*, so the
+    /// mask may admit one nonexistent bank — reads there fall off the end of
+    /// the ROM slice and return 0xFF (see `read_rom`), which is the intended
+    /// simplification rather than a precise per-size bank count.
     fn rom_bank_mask(&self) -> usize {
         let banks = (self.rom.len() / ROM_BANK_SIZE).max(2);
         banks.next_power_of_two() - 1

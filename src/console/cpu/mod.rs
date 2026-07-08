@@ -122,7 +122,7 @@ impl Cpu {
         if pending != 0 {
             self.halted = false;
             if self.ime {
-                self.service_interrupt(bus, pending);
+                self.service_interrupt(bus);
                 return self.cycles;
             }
         }
@@ -156,7 +156,7 @@ impl Cpu {
     /// address has been pushed: if `SP` points at `0xFFFF`, that push overwrites
     /// `IE`, which can retarget the vector or — if it clears every enabled bit —
     /// cancel the dispatch entirely and jump to `0x0000` (the `ie_push` quirk).
-    fn service_interrupt(&mut self, bus: &mut impl Bus, _pending: u8) {
+    fn service_interrupt(&mut self, bus: &mut impl Bus) {
         self.ime = false;
         self.tick(bus); // internal
         self.tick(bus); // internal
