@@ -57,6 +57,67 @@ save / load state** (F5/F7, a deep copy of the whole machine to an in-memory
 slot, zero-dependency). The PPU is a **pixel FIFO** (dot-by-dot in mode 3, so
 mid-scanline register changes take effect). Not yet implemented: MBC3 RTC, MBC2.
 
+## Architecture
+
+The crate mirrors the hardware / host split (`src/lib.rs`): `console` is the
+emulated machine, `emulator` is the frontend that drives it.
+
+```text
+  emulator/   host frontend — window, input, audio, files (minifb / cpal)
+  ─────────   main → Emulator::run(): poll input → run_frame → present → pace
+              display · input · audio · screenshot · paths
+                 │  run_frame() / framebuffer()          ▲  set_buttons()
+                 ▼                                        │
+  console/    the emulated DMG — deterministic, no host I/O
+  ────────
+     Cpu (SM83)  ── bus master ──►  MemoryBus  (decodes addresses, owns all below)
+        every access / internal delay calls bus.tick(n)  ──┐
+                                                            ▼  fans n T-cycles out to:
+     timed:    Ppu (pixel FIFO)   Timer (DIV/TIMA)   Apu (4 ch)   Serial (link)
+     passive:  Cartridge (MBC1/3/5 + battery)   P1 (joypad)   WRAM   HRAM
+```
+
+- **`console`** is the emulated machine — no host I/O, fully deterministic, so a
+  save state is just a deep copy (the read-only ROM is shared via `Arc`, not copied).
+- The **`Cpu` is the only bus master**: every memory access and internal delay calls
+  `bus.tick(n)`, which advances the *timed* peripherals (PPU/Timer/APU/Serial) by `n`
+  T-cycles. That single seam is what makes read/write timing observable. The *passive*
+  peripherals (cartridge, joypad, RAM) only respond to accesses.
+- **`emulator`** runs one `run_frame()` per host frame, then presents the framebuffer
+  and paces to the real ~59.7 Hz.
+
+## Timing
+
+An M-cycle = 4 T-cycles = 4 PPU dots; time advances only through the CPU's ticks:
+
+```text
+  CPU step:   fetch     read      internal
+              [ 4T ]    [ 4T ]    [ 4T ]
+  bus.tick:    ►►►►      ►►►►      ►►►►     each ticks PPU/Timer/APU/Serial 4 dots
+                                           (a register store lands on T4, the M-cycle end)
+```
+
+The PPU is a per-dot state machine. One scanline = 456 dots (452 for the special
+first line after LCD enable); LY steps at the end:
+
+```text
+  dot        0           80                    252                        456
+  internal   │─ mode 2 ──│──── mode 3 ─────────│──────── mode 0 ──────────│
+              OAM scan     Drawing               HBlank
+              80 dots      172 + SCX&7 + sprite/window penalties
+
+  the STAT mode software reads LAGS the internal edge: +4 dots out of the scan,
+  +1 out of Drawing (a subtlety several mooneye tests pin down) —
+  STAT&3     │0─│──── mode 2 ────│──── mode 3 ─────│──────── mode 0 ──────────│
+  dot        0  4                84               253
+              └ mode 0 carried over from the previous line's HBlank for 4 dots
+
+  Frame = 144 visible + 10 VBlank lines = 154 × 456 = 70224 dots ≈ 59.7 Hz.
+```
+
+The dot-precise details behind mode 3's length, the STAT lag and the first line are
+in [docs/testing.md](docs/testing.md) §3.
+
 ### Test-ROM validation
 
 The CPU is **cycle-accurate to the M-cycle** (every memory access / internal

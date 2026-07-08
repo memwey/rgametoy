@@ -46,6 +46,62 @@ PPU 像素-FIFO 渲染(背景 / 窗口 / 精灵,mode 3 逐点)、OAM DMA、串�
 (F5/F7,整机深拷贝到内存槽,零依赖)。PPU 是**像素 FIFO**(mode 3 逐点、行内改寄存器
 生效)。尚未实现:MBC3 RTC、MBC2。
 
+## 架构
+
+crate 按硬件 / 宿主分层(`src/lib.rs`):`console` 是被模拟的机器,`emulator` 是驱动它的前端。
+
+```text
+  emulator/   宿主前端 —— 窗口、输入、音频、文件(minifb / cpal)
+  ─────────   main → Emulator::run(): 读输入 → run_frame → 呈现 → 按帧节流
+              display · input · audio · screenshot · paths
+                 │  run_frame() / framebuffer()          ▲  set_buttons()
+                 ▼                                        │
+  console/    被模拟的 DMG —— 确定性,无宿主 I/O
+  ────────
+     Cpu (SM83)  ── 总线主控 ──►  MemoryBus  (地址译码,拥有下面全部外设)
+        每次访存 / 内部延迟都调 bus.tick(n)  ──┐
+                                              ▼  把 n 个 T-cycle 分发给:
+     受时钟:  Ppu (像素 FIFO)   Timer (DIV/TIMA)   Apu (4 声道)   Serial (串口)
+     被动:    Cartridge (MBC1/3/5 + 电池)   P1 (手柄)   WRAM   HRAM
+```
+
+- **`console`** 是被模拟的机器——无宿主 I/O、完全确定性,所以存档就是一次深拷贝
+  (只读的 ROM 用 `Arc` 共享、不复制)。
+- **`Cpu` 是唯一的总线主控**:每次访存和内部延迟都调 `bus.tick(n)`,把**受时钟**的外设
+  (PPU/Timer/APU/Serial)推进 `n` 个 T-cycle。**这一条 seam** 正是让读写时序可观测的关键。
+  **被动**外设(卡带、手柄、RAM)只在被访问时响应。
+- **`emulator`** 每个宿主帧跑一次 `run_frame()`,再呈现 framebuffer 并节流到真实的 ~59.7 Hz。
+
+## 时序
+
+一个 M-cycle = 4 个 T-cycle = 4 个 PPU dot;时间**只通过 CPU 的 tick 推进**:
+
+```text
+  CPU 步:     取指      读       内部延迟
+              [ 4T ]    [ 4T ]    [ 4T ]
+  bus.tick:    ►►►►      ►►►►      ►►►►     每次把 PPU/Timer/APU/Serial 各推进 4 dot
+                                           (寄存器写落在 T4,即 M-cycle 末拍)
+```
+
+PPU 是逐 dot 的状态机。一条扫描线 = 456 dot(开屏后的特殊首行是 452);LY 在行尾 +1:
+
+```text
+  dot        0           80                    252                        456
+  内部       │─ mode 2 ──│──── mode 3 ─────────│──────── mode 0 ──────────│
+              OAM 扫描     绘制                  HBlank
+              80 dot       172 + SCX&7 + 精灵/窗口惩罚
+
+  软件从 STAT 读到的 mode 比内部沿**滞后**:出 scan 晚 4 dot、出 Drawing 晚 1 dot
+  (好几个 mooneye 测试就卡这点)——
+  STAT&3     │0─│──── mode 2 ────│──── mode 3 ─────│──────── mode 0 ──────────│
+  dot        0  4                84               253
+              └ 行首 4 dot 沿用上一行 HBlank 的 mode 0
+
+  一帧 = 144 可见行 + 10 VBlank 行 = 154 × 456 = 70224 dot ≈ 59.7 Hz。
+```
+
+mode 3 长度、STAT 滞后、开屏首行背后的逐 dot 细节见 [docs/testing_cn.md](docs/testing_cn.md) §3。
+
 ### 测试 ROM 验证
 
 CPU 是**逐 M-cycle 精确**的(每次访存/内部周期都推进外设),PPU mode-3 逐点。通过
