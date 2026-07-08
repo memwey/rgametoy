@@ -306,6 +306,7 @@ rAF 在后台 tab 会被节流到 1Hz,所以不主动 stop 循环也无所谓(�
 - IDB 打开失败:走内存模式(存档不持久),status line 提示
 - Web Audio 启用失败(老浏览器):`enable_audio` 返回 `Err`,UI 灰掉按钮
 - panic:`console_error_panic_hook` 输出到 `console.error`,页面显示红色 banner(可选)
+- 不上抛到 status line 的失败(IDB 读写各阶段、存档记录损坏、快照恢复、ROM 文件读取、AudioContext resume、截图下载)统一经 `weblog::error`/`error_val` 打到 `console.error`;否则在隐私窗口 / 配额超限 / 坏记录时存档会静默失效且 DevTools 里无痕。逐帧 / 逐音频回调路径(present、声道拷贝)故意不记,避免刷屏
 
 ## 14. 构建
 

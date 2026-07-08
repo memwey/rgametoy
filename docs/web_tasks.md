@@ -111,6 +111,19 @@ web 端能存存档的硬性前置,先做。
 
 ---
 
+## Phase 9 — 加固(错误可见性 + 回归测试)
+
+Phase 1–8 跑通后的收敛,降低后续维护风险。全部本地已提交(未 push)。
+
+- [x] **T47** 错误探照灯:所有不上抛 status line 的静默失败(IDB 读写各阶段 / 坏存档记录 / 快照恢复 / ROM 文件读取 / AudioContext resume / 截图)经 `weblog::error(_val)` 打到 `console.error`;逐帧 / 逐音频回调路径(present、声道拷贝)故意不记,避免刷屏
+- [x] **T48** host 单测:把 rAF 节拍数学抽成纯函数 `frames_to_run` 并测(含 60/120/144 Hz 都收敛到 ~59.7 fps 的回归);补音频 `Resampler` 等/降/升采样。`cargo test -p rgametoy-web` 17 绿
+- [x] **T49** 收敛闭包:11 个仅为续命而存在的 `Inner::*_closure` 字段 → `on_click` / `on_event` 两个 helper(建 + 注册 + `forget()`);仅保留 `raf_slot`(自重排)和 `rom_reader_closure`(每次选文件重建)
+- [x] **T50** 浏览器集成测试(`tests/web.rs`,`wasm-bindgen-test`):SaveRecord ⇄ JS 对象往返 + `canvas::present` 落像素。跑法 `wasm-pack test --headless --firefox --test web`;当前仅 wasm32 编译通过,断言需真浏览器执行
+
+**验收**:三条 clippy ratchet + 17 host 测试全绿;浏览器测试 wasm32 编译通过(实跑待 `wasm-pack`)。
+
+---
+
 ## 总依赖图
 
 ```
