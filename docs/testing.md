@@ -48,6 +48,17 @@ cargo run --release --example dump_fb     -- rom.gb out.raw [帧数]  # dump 160
 cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲染一帧
 ```
 
+**调试器(`--features debug`)**:标定硬件测试用的项目内检查器(见 `src/console/debug.rs`),
+`Console::snapshot()` 一次性拿到整机可观测状态(含寄存器看不到的 PPU 内部 mode/dot、STAT 线、
+LY==LYC 锁存),`run_until` 打断点。`examples/inspect.rs` 是它的 CLI:
+
+```sh
+cargo run --release --features debug --example inspect -- rom.gb break 0x48   # 跑到 PC 后打全快照
+cargo run --release --features debug --example inspect -- rom.gb watch 0x48 6 # 每次命中 PC 打快照
+cargo run --release --features debug --example inspect -- rom.gb line 0       # 某扫描线的 mode/dot 变化
+```
+`stat_lyc_onoff` 就是靠它几步定位 patch 未生效 + STAT 线冻结丢失两个 bug 后修好的。
+
 几个判定细节:
 - **mooneye** 的斐波那契签名是所有硬件测试通用的"通过"约定;`run_mooneye` 跑
   240 帧后读寄存器判定。它**只给 PASS/FAIL**,调试具体差异要另 dump 全寄存器。
@@ -74,7 +85,7 @@ cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲�
 
 渲染出完整参考笑脸(FIFO 重写前后字节一致,佐证渲染正确)。
 
-### 2.3 mooneye acceptance —— 58 / 75
+### 2.3 mooneye acceptance —— 59 / 75
 
 | 分组 | 成绩 | 备注 |
 |---|---|---|
@@ -83,7 +94,7 @@ cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲�
 | interrupts | 1/1 ✅ | `ie_push` 已修(压栈盖 IE 重算向量) |
 | oam_dma | 3/3 ✅ | `reg_read`、`sources-GS` 已修 |
 | timer | 12/13 | 仅剩 `rapid_toggle` |
-| ppu | 8/12 | 已修 `hblank_ly_scx`、`intr_2_0/mode0/mode3/oam_ok`、`vblank_stat_intr`;挂 `intr_2_mode0_sprites`、`lcdon_*`、`stat_lyc_onoff` |
+| ppu | 9/12 | 已修 `hblank_ly_scx`、`intr_2_0/mode0/mode3/oam_ok`、`vblank_stat_intr`、`stat_lyc_onoff`;挂 `intr_2_mode0_sprites`、`lcdon_*` |
 | serial | 0/1 | `boot_sclk_align`(需 boot 时序) |
 | root | 30/41 | 只剩 boot 类(见下) |
 
@@ -136,18 +147,18 @@ STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。�
 - **`vblank_stat_intr`**:第 144 行进 VBlank 时同时触发 mode 2/OAM 的 STAT 中断——把
   144 行并入 STAT 线条件即可。
 - **`intr_2_mode0/mode3/oam_ok_timing`**:见 §3.6——找到并修好了那个常量拍偏移。
+- **`stat_lyc_onoff`**:用**项目内的 `inspect` 调试器**(见 `feat(debug)`)一步步定位后修好——
+  三件事一起:①**开屏首行 line 0 走 mode 0**(不扫 OAM),故开屏首拍 STAT 读 mode 0;②关屏时
+  scan 停,只有**冻结的 LYC 一致位**能撑起 STAT 线,所以关屏保留 `stat_line = 一致位 & bit6`,
+  再开屏才是"真上升沿"才触发;③开屏/写 LYC 造成上升沿时**立即**触发 STAT 中断(赶在下一条
+  `DI` 之前,tick 路径会晚一两拍)。inspect 直接看到 `lyc_m/stat_l`,几步就锁定了 patch 未生效 +
+  冻结丢失两个 bug。
 
-仍挂 4 个,本轮已用 trace + 反汇编把各自机制**精确定位**(修复都试过、因需更细的参考拍/
-算法而回退):
+仍挂 2 个(已精确定位机制,缺参考拍/算法):
 
-- **`stat_lyc_onoff`**:反汇编确认失败在 **"rN intr" 轮**(开屏那拍触发 STAT 中断)。已定位
-  两个必需件:①**开屏首拍 STAT 读到 mode 0**(和 `lcdon` 同一硬件行为,`enable→mode 0` 能修好
-  前 4 轮的 STAT 读);②开屏产生 LYC 上升沿时触发 STAT 中断,但**要精确的边沿/延迟语义**——
-  立即触发会在"只读 STAT 不期望中断"的轮里**误触发**;冻结 `stat_line` 又会让该触发的轮**不触发**
-  (卡在 freeze ↔ edge 的两难)。需要 DMG 关屏期间 STAT 线 + 再开屏边沿的精确规则。
-- **`lcdon_*`**:trace 证实真机 line 0 的 STAT 先读 **mode 0** 再进 mode 3(我们读的是 mode 2);
-  模型是"`enable→mode 0` + 首行 mode 3 晚几拍",但**扫了 delay=0/2/4 都不过**,说明还有 mode 3
-  长度/VRAM 锁等更细的差异,缺该测试的精确参考拍值。
+- **`lcdon_*`**:trace 证实真机 line 0 的 STAT 先读 **mode 0** 再进 mode 3(`enable→mode 0` 已就位);
+  但**扫 delay=0..6 都不过**,说明不止 mode 3 起点——还牵涉 mode 3 长度 / OAM·VRAM 锁的逐点时序,
+  缺该测试的精确参考拍值。
 - **`intr_2_mode0_timing_sprites`**:非精灵版已过,只差**精灵的 OBJ mode-3 惩罚**精确(现为固定
   6 dot 近似)。需要 Pan Docs 的 OBJ penalty 算法(按 (x+SCX)%8 + 取数状态算),且改动碰渲染、
   有 acid2/mealybug 回归风险。
@@ -170,14 +181,13 @@ STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。�
 ```
 已过(含定向标定拿下的)              仍挂(标定密集、有回归风险)
 ──────────────────────────────────┼────────────────────────────────────────────
-Blargg cpu_instrs/instr/mem_timing  控制流读时序(call/ret/reti/jp)——读边界/采样拍
-dmg-acid2                           rapid_toggle(总线写的 T 位置)
-mooneye: bits/instr/interrupts      intr_2_mode0_sprites(OBJ mode-3 惩罚)
-oam_dma 全组                        lcdon_*(开屏首行特殊时序)
-timer(除 rapid_toggle)             stat_lyc_onoff(开屏那拍触发中断)
-rst/push/call2 写时序;ei_sequence   mealybug mode-3(取数/寄存器锁存点)
+Blargg cpu_instrs/instr/mem_timing  rapid_toggle(总线写的 T 位置)
+dmg-acid2                           intr_2_mode0_sprites(OBJ mode-3 惩罚)
+mooneye: bits/instr/interrupts      lcdon_*(开屏首行逐点时序)
+oam_dma 全组;控制流读/写时序          mealybug mode-3(取数/寄存器锁存点)
+timer(除 rapid_toggle);ei_sequence
 PPU mode-3 长度 / hblank_ly_scx
-PPU vblank_stat_intr
+PPU vblank_stat_intr / stat_lyc_onoff
 PPU intr_2_0/mode0/mode3/oam_ok  ← STAT mode 滞后 4 dot 标定
 ```
 
