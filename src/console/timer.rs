@@ -56,19 +56,21 @@ impl Timer {
         interrupt
     }
 
-    /// The counter bit that drives TIMA, per TAC bits 0-1 (4096/262144/65536/
-    /// 16384 Hz).
-    fn timer_bit(&self) -> u16 {
-        match self.tac & 0x03 {
+    /// The edge-detector input for an arbitrary TAC value and counter value:
+    /// timer-enable ANDed with the counter bit selected by TAC bits 0-1
+    /// (4096/262144/65536/16384 Hz).
+    fn input_with(tac: u8, counter: u16) -> bool {
+        let bit = match tac & 0x03 {
             0b00 => 9,
             0b01 => 3,
             0b10 => 5,
             _ => 7,
-        }
+        };
+        (tac & 0x04 != 0) && (counter >> bit) & 1 == 1
     }
 
     fn timer_input(&self) -> bool {
-        (self.tac & 0x04 != 0) && (self.counter >> self.timer_bit()) & 1 == 1
+        Self::input_with(self.tac, self.counter)
     }
 
     /// TIMA increments on the falling edge of the timer input.
@@ -131,9 +133,35 @@ impl Timer {
                 }
             }
             0xFF07 => {
-                self.tac = value & 0x07;
-                // Changing enable/frequency can also produce a falling edge.
-                self.update_edge();
+                // The TAC store lands on T3 of the write M-cycle, but the bus
+                // ticks the timer through T4 before delivering it. Replay the
+                // hardware order — write applied at counter-1, then the final
+                // counter increment evaluated under the *new* TAC — and
+                // reconcile with the edge the already-run T4 saw under the old
+                // TAC. This is what lets a TAC enable landing one T-cycle
+                // before the selected bit falls still catch that falling edge
+                // (mooneye `rapid_toggle`), without moving the global bus
+                // write position (which is T4; moving it regresses the
+                // control-flow write-timing tests).
+                let new_tac = value & 0x07;
+                let before = self.counter.wrapping_sub(1);
+                // Edge already counted by this M-cycle's T4 under the old TAC.
+                let t4_old = Self::input_with(self.tac, before)
+                    && !Self::input_with(self.tac, self.counter);
+                // Edges the hardware ordering produces across write + T4.
+                let hw = (Self::input_with(self.tac, before)
+                    && !Self::input_with(new_tac, before))
+                    || (Self::input_with(new_tac, before)
+                        && !Self::input_with(new_tac, self.counter));
+                self.tac = new_tac;
+                self.prev_input = Self::input_with(new_tac, self.counter);
+                if hw && !t4_old {
+                    self.increment_tima();
+                }
+                // The reverse (t4_old && !hw — a phantom increment) needs a
+                // frequency switch landing exactly on the old bit's falling
+                // edge; leaving it uncorrected is the closest approximation
+                // short of unwinding a TIMA increment.
             }
             _ => {}
         }
