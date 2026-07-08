@@ -2,19 +2,13 @@
 //! 24-bit BMP. Useful for eyeballing PPU test ROMs (e.g. dmg-acid2).
 //!
 //! Run with: `cargo run --example screenshot -- rom.gb out.bmp [frames]`
+//!
+//! The BMP encoding is shared with the interactive emulator's F2 screenshot
+//! (`rgametoy::emulator::screenshot`), so both produce identical images.
 
 use rgametoy::console::cartridge::Cartridge;
-use rgametoy::console::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use rgametoy::console::Console;
-use std::fs::File;
-use std::io::{BufWriter, Write};
-
-const PALETTE: [(u8, u8, u8); 4] = [
-    (0xE0, 0xF8, 0xD0),
-    (0x88, 0xC0, 0x70),
-    (0x34, 0x68, 0x56),
-    (0x08, 0x18, 0x20),
-];
+use rgametoy::emulator::screenshot::encode_bmp;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -31,38 +25,6 @@ fn main() {
         console.run_frame();
     }
 
-    write_bmp(&args[2], console.framebuffer()).expect("write BMP");
+    std::fs::write(&args[2], encode_bmp(console.framebuffer())).expect("write BMP");
     println!("wrote {} ({} frames)", args[2], frames);
-}
-
-/// Minimal uncompressed 24-bit BMP writer (rows are stored bottom-up).
-fn write_bmp(path: &str, framebuffer: &[u8]) -> std::io::Result<()> {
-    let (w, h) = (SCREEN_WIDTH, SCREEN_HEIGHT);
-    let row_bytes = w * 3; // 480, already 4-byte aligned
-    let pixel_data = row_bytes * h;
-    let mut out = BufWriter::new(File::create(path)?);
-
-    out.write_all(b"BM")?;
-    out.write_all(&((54 + pixel_data) as u32).to_le_bytes())?;
-    out.write_all(&0u32.to_le_bytes())?;
-    out.write_all(&54u32.to_le_bytes())?;
-    out.write_all(&40u32.to_le_bytes())?;
-    out.write_all(&(w as i32).to_le_bytes())?;
-    out.write_all(&(h as i32).to_le_bytes())?;
-    out.write_all(&1u16.to_le_bytes())?;
-    out.write_all(&24u16.to_le_bytes())?;
-    out.write_all(&0u32.to_le_bytes())?;
-    out.write_all(&(pixel_data as u32).to_le_bytes())?;
-    out.write_all(&2835u32.to_le_bytes())?;
-    out.write_all(&2835u32.to_le_bytes())?;
-    out.write_all(&0u32.to_le_bytes())?;
-    out.write_all(&0u32.to_le_bytes())?;
-
-    for y in (0..h).rev() {
-        for x in 0..w {
-            let (r, g, b) = PALETTE[(framebuffer[y * w + x] & 0x03) as usize];
-            out.write_all(&[b, g, r])?;
-        }
-    }
-    out.flush()
 }

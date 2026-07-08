@@ -1,5 +1,6 @@
 pub mod display;
 pub mod input;
+pub mod screenshot;
 #[cfg(feature = "audio")]
 pub mod audio;
 
@@ -35,8 +36,13 @@ pub struct Emulator {
     quick_state: Option<SaveState>,
     prev_save: bool,
     prev_load: bool,
+    prev_screenshot: bool,
     /// `<rom>.sav` path, set only for battery-backed cartridges.
     save_path: Option<PathBuf>,
+    /// Where F2 screenshots are written, and the loaded ROM's title (used to
+    /// name them).
+    screenshot_dir: PathBuf,
+    rom_title: String,
     #[cfg(feature = "audio")]
     audio: Option<crate::emulator::audio::AudioPlayer>,
 }
@@ -66,7 +72,10 @@ impl Emulator {
             quick_state: None,
             prev_save: false,
             prev_load: false,
+            prev_screenshot: false,
             save_path: None,
+            screenshot_dir: screenshot::default_dir(),
+            rom_title: String::new(),
             #[cfg(feature = "audio")]
             audio,
         }
@@ -77,13 +86,20 @@ impl Emulator {
         self.turbo_speed = speed.max(1.0);
     }
 
+    /// Directory F2 screenshots are written to (default: `$RGAMETOY_SCREENSHOT_DIR`
+    /// or `screenshots/`).
+    pub fn set_screenshot_dir<P: Into<PathBuf>>(&mut self, dir: P) {
+        self.screenshot_dir = dir.into();
+    }
+
     /// Load a `.gb` ROM from disk and boot into the DMG post-boot state. For a
     /// battery-backed cartridge, restore its save from a sibling `.sav` file if
     /// one exists.
     pub fn load_rom<P: AsRef<Path>>(&mut self, path: P) -> std::io::Result<()> {
         let data = std::fs::read(&path)?;
         let cartridge = Cartridge::from_bytes(data);
-        println!("Loaded ROM: \"{}\"", cartridge.title());
+        self.rom_title = cartridge.title().to_string();
+        println!("Loaded ROM: \"{}\"", self.rom_title);
         self.console.load_cartridge(cartridge);
 
         if self.console.get_bus_mut().cartridge().has_battery() {
@@ -108,7 +124,7 @@ impl Emulator {
 
             let input = crate::emulator::input::poll(&self.display);
             self.apply_input(&input);
-            self.handle_save_state(&input);
+            self.handle_hotkeys(&input);
             let speed = if input.turbo { self.turbo_speed } else { 1.0 };
 
             // Emulate one frame in the core, then present it — presentation is a
@@ -175,9 +191,9 @@ impl Emulator {
         }
     }
 
-    /// Handle the instant save/load hotkeys (edge-triggered: one press acts
-    /// once). F5 captures a snapshot, F7 restores it.
-    fn handle_save_state(&mut self, input: &crate::emulator::input::InputState) {
+    /// Handle the edge-triggered hotkeys (one press acts once): F5/F7 store and
+    /// restore the instant save-state slot, F2 saves a screenshot.
+    fn handle_hotkeys(&mut self, input: &crate::emulator::input::InputState) {
         if input.save && !self.prev_save {
             self.quick_state = Some(self.console.save_state());
             println!("save state stored");
@@ -188,8 +204,27 @@ impl Emulator {
                 println!("save state loaded");
             }
         }
+        if input.screenshot && !self.prev_screenshot {
+            self.take_screenshot();
+        }
         self.prev_save = input.save;
         self.prev_load = input.load;
+        self.prev_screenshot = input.screenshot;
+    }
+
+    /// Write the current frame to the screenshot directory, reporting where it
+    /// landed (or why it failed) — a screenshot should never take down the
+    /// emulator.
+    fn take_screenshot(&mut self) {
+        let hint = if self.rom_title.is_empty() {
+            "rgametoy"
+        } else {
+            &self.rom_title
+        };
+        match screenshot::save(self.console.framebuffer(), &self.screenshot_dir, hint) {
+            Ok(path) => println!("screenshot saved: {}", path.display()),
+            Err(e) => eprintln!("screenshot failed ({}): {e}", self.screenshot_dir.display()),
+        }
     }
 
     fn apply_input(&mut self, input: &crate::emulator::input::InputState) {

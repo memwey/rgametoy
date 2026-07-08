@@ -1,4 +1,5 @@
 use crate::console::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::emulator::screenshot::DMG_PALETTE;
 use minifb::{Key, Scale, Window, WindowOptions};
 
 /// Integer upscale factor. Each Game Boy pixel becomes a SCALE×SCALE block, so
@@ -8,9 +9,17 @@ pub const SCALE: usize = 4;
 const WINDOW_WIDTH: usize = SCREEN_WIDTH * SCALE;
 const WINDOW_HEIGHT: usize = SCREEN_HEIGHT * SCALE;
 
-/// DMG grayscale-green palette: shade 0 is the lightest, shade 3 the darkest.
-/// Mapping a shade to a colour is a frontend choice; the core only emits shades.
-const PALETTE: [u32; 4] = [0xFFE0F8D0, 0xFF88C070, 0xFF346856, 0xFF081820];
+/// The window's opaque-ARGB palette, derived from the shared [`DMG_PALETTE`] so
+/// the window and saved screenshots always use the same colours.
+const fn argb(rgb: (u8, u8, u8)) -> u32 {
+    0xFF00_0000 | ((rgb.0 as u32) << 16) | ((rgb.1 as u32) << 8) | rgb.2 as u32
+}
+const PALETTE: [u32; 4] = [
+    argb(DMG_PALETTE[0]),
+    argb(DMG_PALETTE[1]),
+    argb(DMG_PALETTE[2]),
+    argb(DMG_PALETTE[3]),
+];
 
 /// The host window. Owns presentation only — the integer upscale and the
 /// shade→colour mapping live here; raw key state is exposed for the input

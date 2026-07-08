@@ -24,3 +24,6 @@ target
 # Added by cargo
 
 /target
+
+# Screenshots saved by the F2 hotkey
+/screenshots/

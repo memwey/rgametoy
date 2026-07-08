@@ -11,19 +11,25 @@ cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍
 ```
 
 按键映射:方向键 = 方向键,`Z` = A,`X` = B,`Enter` = Start,`Backspace` = Select,
-**按住 `Tab` = 快进**,`F5` = 即时存档 / `F7` = 即时读档,`Esc` = 退出。
+**按住 `Tab` = 快进**,`F5` = 即时存档 / `F7` = 即时读档,`F2` = 截图,`Esc` = 退出。
 
 快进以 CPU 时钟为基准:每个模拟帧的真实时间预算 = `一帧时间 / 倍率`,呈现仍每帧一次;
 松开 `Tab` 立即回原速。快进期间音频静音(避免过量采样)。
+
+**截图**:`F2` 把当前帧按原生 160×144 存成 24-bit BMP(像素精确,适合调试),落到
+`./screenshots/`(可用环境变量 `RGAMETOY_SCREENSHOT_DIR` 改目录),文件名
+`<卡带标题>-<毫秒时间戳>.bmp`,存好后在终端打印路径。编码器与无头的
+`--example screenshot` 共用一份(`src/emulator/screenshot.rs`),窗口与截图配色一致。
 
 支持的卡带:无 MBC (32KB)、MBC1、MBC3(不含 RTC)、MBC5,含外部 RAM 与 bank 切换。
 带电池的卡带会把外部 RAM 存档持久化到与 ROM 同目录的 `<rom>.sav` 文件
 (启动时自动读回,运行中防抖落盘,退出时兜底保存)。
 
 已实现:完整 SM83 指令集(含 CB 前缀)、中断(VBlank/STAT/Timer/Serial/Joypad)、Timer、
-PPU 扫描线渲染(背景 / 窗口 / 精灵)、OAM DMA、串口(截获输出)、键盘输入、电池存档 (`.sav`)、
-**APU 四声道声音**(方波 ×2 + 波形 + 噪声,含扫频 / 包络 / 长度计数器)。APU 仿真核心
-是纯 Rust、默认编译;真实音频输出通过 `audio` feature(cpal)开启,默认关闭。
+PPU 像素-FIFO 渲染(背景 / 窗口 / 精灵,mode 3 逐点)、OAM DMA、串口(截获输出)、键盘输入、
+截图(F2)、电池存档 (`.sav`)、**APU 四声道声音**(方波 ×2 + 波形 + 噪声,含扫频 / 包络 /
+长度计数器)。APU 仿真核心是纯 Rust、默认编译;真实音频输出通过 `audio` feature(cpal)开启,
+默认关闭。
 
 另外支持**快进/加速**(按住 Tab,倍率可配)和**即时存档 / 读档 (save state)**
 (F5/F7,整机深拷贝到内存槽,零依赖)。PPU 是**像素 FIFO**(mode 3 逐点、行内改寄存器
