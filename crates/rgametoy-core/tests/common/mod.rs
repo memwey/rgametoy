@@ -55,7 +55,7 @@ pub fn roms_dir() -> Option<PathBuf> {
 
 fn boot(rom: &[u8]) -> Console {
     let mut c = Console::new();
-    c.load_cartridge(Cartridge::from_bytes(rom.to_vec()));
+    c.power_on(Cartridge::from_bytes(rom.to_vec()));
     c
 }
 

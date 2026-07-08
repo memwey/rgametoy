@@ -36,7 +36,7 @@ fn rom_boots_and_renders_background() {
     rom[0x0100..0x0100 + program.len()].copy_from_slice(&program);
 
     let mut console = Console::new();
-    console.load_cartridge(Cartridge::from_bytes(rom));
+    console.power_on(Cartridge::from_bytes(rom));
 
     // A few frames: the first sets up VRAM and re-enables the LCD; subsequent
     // frames render it.

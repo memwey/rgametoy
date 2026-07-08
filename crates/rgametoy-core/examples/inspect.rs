@@ -34,7 +34,7 @@ fn main() {
     let cmd = args[2].as_str();
     let load = || {
         let mut c = Console::new();
-        c.load_cartridge(Cartridge::from_bytes(std::fs::read(rom).expect("read ROM")));
+        c.power_on(Cartridge::from_bytes(std::fs::read(rom).expect("read ROM")));
         c
     };
     let hex = |s: &str| u16::from_str_radix(s.trim_start_matches("0x"), 16).expect("hex");

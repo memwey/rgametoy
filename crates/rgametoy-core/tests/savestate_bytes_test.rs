@@ -27,7 +27,7 @@ fn stub_rom() -> Vec<u8> {
 fn new_console() -> Console {
     let mut c = Console::new();
     let cart = Cartridge::from_bytes(stub_rom());
-    c.load_cartridge(cart);
+    c.power_on(cart);
     c
 }
 

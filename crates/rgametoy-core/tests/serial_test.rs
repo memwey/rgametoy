@@ -1,6 +1,5 @@
 extern crate rgametoy_core;
 
-use rgametoy_core::bus::Bus;
 use rgametoy_core::Console;
 
 /// The bytes a program shifts out over the serial port are captured — this is
@@ -12,8 +11,8 @@ fn serial_transfers_are_captured() {
     for &byte in b"OK" {
         // Program: write the byte to SB (0xFF01), then start a transfer with
         // the internal clock by writing 0x81 to SC (0xFF02).
-        console.get_bus_mut().write_byte(0xFF01, byte);
-        console.get_bus_mut().write_byte(0xFF02, 0x81);
+        console.write_mem(0xFF01, byte);
+        console.write_mem(0xFF02, 0x81);
 
         // A byte takes 4096 T-cycles; step long enough (ROM is NOPs) for the
         // transfer to complete.
@@ -29,9 +28,9 @@ fn serial_transfers_are_captured() {
 #[test]
 fn no_output_without_transfer_start() {
     let mut console = Console::new();
-    console.get_bus_mut().write_byte(0xFF01, b'X');
+    console.write_mem(0xFF01, b'X');
     // SC written without bit 7 -> no transfer.
-    console.get_bus_mut().write_byte(0xFF02, 0x01);
+    console.write_mem(0xFF02, 0x01);
     for _ in 0..2000 {
         console.step();
     }

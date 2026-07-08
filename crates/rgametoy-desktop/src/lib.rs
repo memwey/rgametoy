@@ -144,7 +144,7 @@ impl Emulator {
         self.rom_title = cartridge.title();
         let has_battery = cartridge.has_battery();
         let ram_kib = cartridge.ram().len() / 1024;
-        self.console.load_cartridge(cartridge);
+        self.console.power_on(cartridge);
 
         // Startup banner: what got loaded.
         log::heading(&format!(
@@ -163,7 +163,7 @@ impl Emulator {
             let save_path = self.data_dir.join("saves").join(save_name);
             match std::fs::read(&save_path) {
                 Ok(saved) => {
-                    self.console.get_bus_mut().cartridge_mut().load_ram(&saved);
+                    self.console.cartridge_mut().load_ram(&saved);
                     log::field("save", &format!("{} (loaded)", save_path.display()));
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -290,11 +290,11 @@ impl Emulator {
             Some(p) => p.clone(),
             None => return,
         };
-        let bus = self.console.get_bus_mut();
-        if !bus.cartridge().ram_dirty() {
+        // Battery RAM lives in the cartridge; the console just exposes it.
+        if !self.console.cartridge().ram_dirty() {
             return;
         }
-        let ram = bus.cartridge().ram().to_vec();
+        let ram = self.console.cartridge().ram().to_vec();
         // The saves/ directory may not exist yet on the first flush.
         if let Some(dir) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(dir) {
@@ -303,7 +303,7 @@ impl Emulator {
             }
         }
         match std::fs::write(&path, &ram) {
-            Ok(()) => bus.cartridge_mut().clear_ram_dirty(),
+            Ok(()) => self.console.cartridge_mut().clear_ram_dirty(),
             Err(e) => log::error(&format!("failed to write save {}: {e}", path.display())),
         }
     }

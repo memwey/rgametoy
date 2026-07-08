@@ -1,5 +1,4 @@
 extern crate rgametoy_core;
-use rgametoy_core::bus::Bus;
 use rgametoy_core::Console;
 
 /// End-to-end: execute a small program with a backward loop and verify the
@@ -42,8 +41,8 @@ fn test_sum_loop_program() {
 fn test_ie_push_reevaluates_the_interrupt_vector() {
     let mut console = Console::new();
     console.load_program(&[0x00]); // ROM content irrelevant; we dispatch first
-    console.get_bus_mut().write_byte(0xFFFF, 0x04); // IE: enable Timer only
-    console.get_bus_mut().write_byte(0xFF0F, 0x05); // IF: Timer + VBlank pending
+    console.write_mem(0xFFFF, 0x04); // IE: enable Timer only
+    console.write_mem(0xFF0F, 0x05); // IF: Timer + VBlank pending
 
     let cpu = console.get_cpu_mut();
     cpu.set_pc(0x0100); // return-address high byte = 0x01
@@ -60,7 +59,7 @@ fn test_ie_push_reevaluates_the_interrupt_vector() {
         "vector retargeted to VBlank after IE was overwritten"
     );
     assert_eq!(
-        console.get_bus_mut().read_byte(0xFF0F) & 0x1F,
+        console.read_mem(0xFF0F) & 0x1F,
         0x04,
         "VBlank's IF bit was cleared; the Timer request remains"
     );
@@ -77,8 +76,8 @@ fn test_illegal_opcode_locks_up_the_cpu() {
     let pc = console.get_cpu().get_pc();
 
     // A pending, enabled interrupt must not wake a locked CPU (unlike HALT).
-    console.get_bus_mut().write_byte(0xFFFF, 0x01); // IE: VBlank
-    console.get_bus_mut().write_byte(0xFF0F, 0x01); // IF: VBlank pending
+    console.write_mem(0xFFFF, 0x01); // IE: VBlank
+    console.write_mem(0xFF0F, 0x01); // IF: VBlank pending
     console.get_cpu_mut().enable_interrupts();
 
     for _ in 0..100 {

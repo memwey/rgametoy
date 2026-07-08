@@ -22,7 +22,7 @@ fn main() {
     let data = std::fs::read(&args[1]).expect("read ROM");
 
     let mut console = Console::new();
-    console.load_cartridge(Cartridge::from_bytes(data));
+    console.power_on(Cartridge::from_bytes(data));
 
     let start = Instant::now();
     for _ in 0..frames {

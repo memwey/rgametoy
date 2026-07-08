@@ -11,7 +11,7 @@ fn main() {
     let frames: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(60);
     let data = std::fs::read(&args[1]).expect("read ROM");
     let mut console = Console::new();
-    console.load_cartridge(Cartridge::from_bytes(data));
+    console.power_on(Cartridge::from_bytes(data));
     for _ in 0..frames {
         console.run_frame();
     }

@@ -1,6 +1,5 @@
 extern crate rgametoy_core;
 
-use rgametoy_core::bus::Bus;
 use rgametoy_core::Console;
 
 /// Build a console with `program` loaded at address 0x0000 and PC/SP at a
@@ -33,7 +32,7 @@ fn test_ld_hl_mem_roundtrip() {
     c.get_cpu_mut().set_hl(0xC000);
     c.get_cpu_mut().get_registers_mut().set_a(0x99);
     c.step();
-    assert_eq!(c.get_bus_mut().read_byte(0xC000), 0x99);
+    assert_eq!(c.read_mem(0xC000), 0x99);
 }
 
 #[test]
@@ -43,10 +42,10 @@ fn test_ldi_ldd() {
     c.get_cpu_mut().set_hl(0xC000);
     c.get_cpu_mut().get_registers_mut().set_a(0x11);
     c.step();
-    assert_eq!(c.get_bus_mut().read_byte(0xC000), 0x11);
+    assert_eq!(c.read_mem(0xC000), 0x11);
     assert_eq!(c.get_cpu().get_registers().get_hl(), 0xC001);
     c.step();
-    assert_eq!(c.get_bus_mut().read_byte(0xC001), 0x11);
+    assert_eq!(c.read_mem(0xC001), 0x11);
     assert_eq!(c.get_cpu().get_registers().get_hl(), 0xC000);
 }
 
@@ -56,7 +55,7 @@ fn test_ldh_and_ld_c_indirect() {
     let mut c = setup(&[0xE0, 0x80, 0xF0, 0x80]);
     c.get_cpu_mut().get_registers_mut().set_a(0x5A);
     c.step(); // write A -> 0xFF80 (HRAM)
-    assert_eq!(c.get_bus_mut().read_byte(0xFF80), 0x5A);
+    assert_eq!(c.read_mem(0xFF80), 0x5A);
     c.get_cpu_mut().get_registers_mut().set_a(0x00);
     c.step(); // read 0xFF80 back into A
     assert_eq!(c.get_cpu().get_registers().get_a(), 0x5A);
@@ -178,9 +177,9 @@ fn test_inc_hl_indirect() {
     // INC (HL) operates on memory.
     let mut c = setup(&[0x34]);
     c.get_cpu_mut().set_hl(0xC000);
-    c.get_bus_mut().write_byte(0xC000, 0xFF);
+    c.write_mem(0xC000, 0xFF);
     c.step();
-    assert_eq!(c.get_bus_mut().read_byte(0xC000), 0x00);
+    assert_eq!(c.read_mem(0xC000), 0x00);
     assert!(c.get_cpu().get_registers().get_flag_z());
 }
 
@@ -307,8 +306,8 @@ fn test_call_ret() {
     c.step(); // CALL
     assert_eq!(c.get_cpu().get_pc(), 0x0006);
     assert_eq!(c.get_cpu().get_sp(), 0xCFFE);
-    assert_eq!(c.get_bus_mut().read_byte(0xCFFE), 0x03); // low byte of 0x0003
-    assert_eq!(c.get_bus_mut().read_byte(0xCFFF), 0x00);
+    assert_eq!(c.read_mem(0xCFFE), 0x03); // low byte of 0x0003
+    assert_eq!(c.read_mem(0xCFFF), 0x00);
 
     c.step(); // RET
     assert_eq!(c.get_cpu().get_pc(), 0x0003);
@@ -329,8 +328,8 @@ fn test_push_pop_af_masks_low_nibble() {
     // POP AF must clear the low nibble of F.
     let mut c = setup(&[0xF1]); // POP AF
     c.get_cpu_mut().set_sp(0xC000);
-    c.get_bus_mut().write_byte(0xC000, 0xFF); // F
-    c.get_bus_mut().write_byte(0xC001, 0x42); // A
+    c.write_mem(0xC000, 0xFF); // F
+    c.write_mem(0xC001, 0x42); // A
     c.step();
     let r = c.get_cpu().get_registers();
     assert_eq!(r.get_a(), 0x42);
@@ -365,13 +364,13 @@ fn test_interrupt_dispatch_priority() {
     // With LCDStat (bit1) and Timer (bit2) both pending, LCDStat wins.
     let mut c = setup(&[0x00]);
     c.get_cpu_mut().enable_interrupts();
-    c.get_bus_mut().write_byte(0xFFFF, 0xFF); // IE: all enabled
-    c.get_bus_mut().write_byte(0xFF0F, 0x06); // IF: LCDStat + Timer
+    c.write_mem(0xFFFF, 0xFF); // IE: all enabled
+    c.write_mem(0xFF0F, 0x06); // IF: LCDStat + Timer
     let cycles = c.step();
     assert_eq!(cycles, 20);
     assert_eq!(c.get_cpu().get_pc(), 0x0048); // LCDStat handler
     assert!(!c.get_cpu().ime_enabled()); // IME cleared on dispatch
-    assert_eq!(c.get_bus_mut().read_byte(0xFF0F) & 0x1F, 0x04); // LCDStat bit cleared
+    assert_eq!(c.read_mem(0xFF0F) & 0x1F, 0x04); // LCDStat bit cleared
 }
 
 #[test]
@@ -379,8 +378,8 @@ fn test_ei_has_one_instruction_delay() {
     // EI ; NOP ; NOP  — the interrupt may only fire after the instruction
     // following EI has executed.
     let mut c = setup(&[0xFB, 0x00, 0x00]);
-    c.get_bus_mut().write_byte(0xFFFF, 0x01); // IE: VBlank
-    c.get_bus_mut().write_byte(0xFF0F, 0x01); // IF: VBlank
+    c.write_mem(0xFFFF, 0x01); // IE: VBlank
+    c.write_mem(0xFF0F, 0x01); // IF: VBlank
 
     c.step(); // EI
     assert!(!c.get_cpu().ime_enabled());
@@ -398,14 +397,14 @@ fn test_halt_wakes_on_interrupt() {
     // HALT with IME on: the CPU idles until an interrupt is requested.
     let mut c = setup(&[0x76]);
     c.get_cpu_mut().enable_interrupts();
-    c.get_bus_mut().write_byte(0xFFFF, 0x01); // IE: VBlank
+    c.write_mem(0xFFFF, 0x01); // IE: VBlank
 
     c.step(); // HALT
     assert!(c.get_cpu().is_halted());
     c.step(); // still halted, nothing pending
     assert!(c.get_cpu().is_halted());
 
-    c.get_bus_mut().write_byte(0xFF0F, 0x01); // request VBlank
+    c.write_mem(0xFF0F, 0x01); // request VBlank
     c.step();
     assert!(!c.get_cpu().is_halted());
     assert_eq!(c.get_cpu().get_pc(), 0x0040);
@@ -417,8 +416,8 @@ fn test_halt_bug_executes_next_byte_twice() {
     // the byte after HALT is executed twice.
     let mut c = setup(&[0x76, 0x3C]); // HALT ; INC A
     c.get_cpu_mut().disable_interrupts();
-    c.get_bus_mut().write_byte(0xFFFF, 0x01);
-    c.get_bus_mut().write_byte(0xFF0F, 0x01);
+    c.write_mem(0xFFFF, 0x01);
+    c.write_mem(0xFF0F, 0x01);
     c.get_cpu_mut().get_registers_mut().set_a(0x00);
 
     c.step(); // HALT (does not actually halt; arms the bug)

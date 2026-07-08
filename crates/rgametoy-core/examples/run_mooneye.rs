@@ -17,7 +17,7 @@ fn main() {
     };
     let data = std::fs::read(&path).expect("read ROM");
     let mut console = Console::new();
-    console.load_cartridge(Cartridge::from_bytes(data));
+    console.power_on(Cartridge::from_bytes(data));
 
     // mooneye tests finish quickly; run a generous number of frames.
     for _ in 0..240 {

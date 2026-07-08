@@ -14,7 +14,6 @@
 //! println!("{}", console.snapshot());
 //! ```
 
-use super::bus::Bus;
 use super::Console;
 
 /// A one-shot view of the whole machine. Fields mirror hardware registers plus
@@ -93,9 +92,9 @@ impl Console {
     /// Capture the full observable state right now.
     pub fn snapshot(&self) -> Snapshot {
         let r = self.cpu.get_registers();
-        let (ppu_mode, dots, lyc_match, stat_line) = self.bus.debug_ppu();
-        let (div, tima, tma, tac) = self.bus.debug_timer();
-        let (dma_active, dma_src) = self.bus.debug_dma();
+        let (ppu_mode, dots, lyc_match, stat_line) = self.sys.debug_ppu();
+        let (div, tima, tma, tac) = self.sys.debug_timer();
+        let (dma_active, dma_src) = self.sys.debug_dma();
         Snapshot {
             cycle: self.total_cycles,
             pc: r.get_pc(),
@@ -106,13 +105,13 @@ impl Console {
             hl: r.get_hl(),
             ime: self.cpu.ime_enabled(),
             halted: self.cpu.is_halted(),
-            if_reg: self.bus.read_byte(0xFF0F) & 0x1F,
-            ie_reg: self.bus.read_byte(0xFFFF) & 0x1F,
-            lcdc: self.bus.read_byte(0xFF40),
-            stat: self.bus.read_byte(0xFF41),
+            if_reg: self.read_mem(0xFF0F) & 0x1F,
+            ie_reg: self.read_mem(0xFFFF) & 0x1F,
+            lcdc: self.read_mem(0xFF40),
+            stat: self.read_mem(0xFF41),
             ppu_mode,
-            ly: self.bus.read_byte(0xFF44),
-            lyc: self.bus.read_byte(0xFF45),
+            ly: self.read_mem(0xFF44),
+            lyc: self.read_mem(0xFF45),
             dots,
             lyc_match,
             stat_line,
@@ -127,7 +126,7 @@ impl Console {
 
     /// Read an arbitrary byte through the bus (no side effects on read).
     pub fn peek(&self, addr: u16) -> u8 {
-        self.bus.read_byte(addr)
+        self.read_mem(addr)
     }
 
     /// Step until `pred` holds (checked *before* each step, so it can break at a

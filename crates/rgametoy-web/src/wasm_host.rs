@@ -194,7 +194,7 @@ impl Inner {
         };
         let title = cartridge_title(bytes);
         self.title = title.clone();
-        self.console.load_cartridge(cart);
+        self.console.power_on(cart);
         self.has_rom = true;
         self.paused = false;
 
@@ -213,7 +213,7 @@ impl Inner {
             let Some(rec) = rec else { return };
             let Some(ram) = &rec.ram else { return };
             let Ok(mut inner) = host_rc.try_borrow_mut() else { return };
-            inner.console.load_ram_bytes(ram);
+            inner.console.cartridge_mut().load_ram_bytes(ram);
             if let Some(qs) = &rec.quick_state {
                 let _ = inner.console.load_state_bytes(qs);
             }
@@ -231,10 +231,9 @@ impl Inner {
             self.set_status("nothing to reset");
             return;
         }
-        // Re-issue load_cartridge with a no-op: the current Cartridge is
-        // still in `self.console`, so we just ask the console to power
-        // itself on again.
-        self.console.power_on();
+        // Reboot in place: the inserted cartridge stays; only the CPU / PPU /
+        // APU / timer return to their post-boot state. Saved RAM is untouched.
+        self.console.reset();
         self.paused = false;
         self.set_status("reset");
     }
@@ -246,7 +245,7 @@ impl Inner {
         if self.rom_hash.is_empty() {
             return;
         }
-        let ram = self.console.save_ram_bytes();
+        let ram = self.console.cartridge().save_ram_bytes();
         // Only write if the cartridge actually has RAM — saves with no
         // external RAM are pointless, and the dirty-flag check (a
         // separate code path) would not be triggered anyway.
@@ -272,7 +271,7 @@ impl Inner {
         let record = SaveRecord {
             rom_hash: self.rom_hash.clone(),
             rom_title: self.title.clone(),
-            ram: self.console.save_ram_bytes().into(),
+            ram: self.console.cartridge().save_ram_bytes().into(),
             quick_state: Some(bytes),
             updated_at: js_sys::Date::now(),
         };
@@ -432,10 +431,10 @@ impl Inner {
         // event-driven trigger, not a blind timer — then clear the dirty flag.
         if self.has_rom
             && self.frame_idx.is_multiple_of(AUTOSAVE_DEBOUNCE)
-            && self.console.get_bus_mut().cartridge().ram_dirty()
+            && self.console.cartridge().ram_dirty()
         {
             self.persist_record();
-            self.console.get_bus_mut().cartridge_mut().clear_ram_dirty();
+            self.console.cartridge_mut().clear_ram_dirty();
         }
         self.frame_idx = self.frame_idx.wrapping_add(1);
 
