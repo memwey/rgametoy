@@ -74,30 +74,26 @@ cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲�
 
 渲染出完整参考笑脸(FIFO 重写前后字节一致,佐证渲染正确)。
 
-### 2.3 mooneye acceptance —— 49 / 75
+### 2.3 mooneye acceptance —— 58 / 75
 
 | 分组 | 成绩 | 备注 |
 |---|---|---|
 | bits | 3/3 ✅ | |
 | instr | 1/1 ✅ | |
 | interrupts | 1/1 ✅ | `ie_push` 已修(压栈盖 IE 重算向量) |
-| oam_dma | 3/3 ✅ | `reg_read`(DMA 期间 I/O 仍可读)、`sources-GS`(源 E0-FF 读 WRAM 回声)已修 |
+| oam_dma | 3/3 ✅ | `reg_read`、`sources-GS` 已修 |
 | timer | 12/13 | 仅剩 `rapid_toggle` |
 | ppu | 8/12 | 已修 `hblank_ly_scx`、`intr_2_0/mode0/mode3/oam_ok`、`vblank_stat_intr`;挂 `intr_2_mode0_sprites`、`lcdon_*`、`stat_lyc_onoff` |
 | serial | 0/1 | `boot_sclk_align`(需 boot 时序) |
-| root | 21/41 | 拆解见下 |
+| root | 30/41 | 只剩 boot 类(见下) |
 
-root 组 20 个失败按性质分两类:
+root 组仅剩 11 个失败,**全是 Boot 状态**:`boot_regs-{dmg0,mgb,sgb,sgb2}`、`boot_div*`、
+`boot_hwio*`,校验**特定机型**开机后的寄存器/IO 状态——我们只做 DMG、也不跑真实 boot ROM,
+故不在目标范围(`boot_regs-dmgABC` 真正的 DMG 已过)。
 
-1. **Boot 状态(11 个,基本不在目标范围)**:`boot_regs-{dmg0,mgb,sgb,sgb2}`、
-   `boot_div*`、`boot_hwio*`。校验的是**特定机型**开机后的寄存器/IO 状态,我们只做
-   DMG、也不跑真实 boot ROM。注:`boot_regs-dmgABC`(真正的 DMG)**已通过**。
-2. **控制流读/内部时序(9 个)**:`call_timing`、`call_cc_timing`、`jp_timing`、
-   `jp_cc_timing`、`ret_timing`、`ret_cc_timing`、`reti_timing`、`add_sp_e_timing`、
-   `ld_hl_sp_e_timing`。见 §3。
-
-本轮已修并转绿(root 组内):控制流**写**时序 `rst_timing`、`push_timing`、
-`call_timing2`、`call_cc_timing2`,以及 `ei_sequence`(EI 一指令延迟在连续 EI 下的正确性)。
+本轮已修并转绿(root 组内):控制流**写**时序 `rst/push/call2/call_cc2`、`ei_sequence`,
+以及控制流**读**时序整簇 `call/call_cc/jp/jp_cc/ret/ret_cc/reti/add_sp_e/ld_hl_sp_e _timing`
+(见 §3.1)。
 
 ### 2.4 mealybug tearoom(DMG)—— 0 / 24
 
@@ -115,18 +111,16 @@ root 组 20 个失败按性质分两类:
 **T-cycle / 逐点精确**落点的,还没到位。这些不是"改几行"能干净修的,普遍**标定密集、
 有回归风险**,故单独列出。
 
-### 3.1 控制流读时序(`call/ret/reti/jp/add_sp_e/ld_hl_sp_e`)
-mooneye 这些 timing 测试用 **OAM DMA 当示波器**:把栈指进 OAM、或让操作数从外部总线
-读取,再用 DMA 窗口卡边界。**写**方向已经修好(见
-[`fix(bus): cycle-accurate OAM DMA start delay and bus blocking`](../src/console/bus.rs)):
-启动延迟 = 1 个空转 M-cycle(M=1 仍可访问 OAM、M=2 才 block),窗口内对外部总线/OAM
-的写被丢弃——`rst/push/call2/call_cc2` 因此转绿。
+### 3.1 控制流读时序 —— 已修(源总线相关的 DMA 阻塞)
+mooneye 这些 timing 测试用 **OAM DMA 当示波器**:把栈指进 OAM、或让指令从 ROM 取指,
+再用 DMA 窗口卡边界。**写**方向早先修好(启动延迟 + 窗口内写丢弃)。
 
-**读**方向仍没到位,但原因和先前的猜测**相反**:曾假设 DMA 期间读外部总线应返回"DMA
-当前在搬运的字节"。实测把它建成**逐字节冲突读**后,`oam_dma_start/restart/timing` 立刻
-回归——**证明 DMG 在 DMA 期间读到的就是 `$FF`(开路总线),不是源字节**,该改动已回退。
-所以这簇失败是更细的**读边界/采样拍**问题(dump 寄存器可见整个跑飞),暂未定位到可干净修
-的根因。
+**读**方向的根因用 trace + 反汇编定位到了:`ret_timing` 的 RET 在 **ROM**(0x0192),DMA
+源是 **$80(VRAM)**。真机上 **DMA 只占用与源冲突的那条总线**:VRAM 源占**视频总线**
+(VRAM+OAM),CPU 仍可读**外部总线**(ROM)——所以 RET 取指成功,只有 OAM 的 pop 被挡。
+我们之前**无脑阻塞 `addr < 0xFEA0`**(所有源一样),把 ROM 取指也挡了 → 读到 `$FF` = RST 38
+→ 指令跑飞。改成按源分总线阻塞(`dma_conflicts`,仅 OAM 恒锁)后,**整簇 9 个读时序全绿**,
+oam_dma 组不回归(见 `fix(bus): OAM DMA blocks only the bus that conflicts with its source`)。
 
 ### 3.2 `rapid_toggle`(timer 亚周期)
 timer 内部本就逐 T-cycle。差的是 **CPU 的写在 M-cycle 内哪一拍提交**:紧凑循环里连写
