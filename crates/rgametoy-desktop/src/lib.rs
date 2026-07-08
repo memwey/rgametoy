@@ -302,9 +302,24 @@ impl Emulator {
                 return;
             }
         }
-        match std::fs::write(&path, &ram) {
+        // Atomic write: write a sibling temp file, then rename it over the
+        // `.sav`. A rename within the same directory is atomic, so a crash
+        // mid-flush can never leave a half-written (corrupt) save — the file is
+        // always the previous or the new one, in full. (`fs::write` alone
+        // truncates-then-writes and could be caught half-done.)
+        let mut tmp = path.clone().into_os_string();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        if let Err(e) = std::fs::write(&tmp, &ram) {
+            log::error(&format!("failed to write save {}: {e}", tmp.display()));
+            return;
+        }
+        match std::fs::rename(&tmp, &path) {
             Ok(()) => self.console.cartridge_mut().clear_ram_dirty(),
-            Err(e) => log::error(&format!("failed to write save {}: {e}", path.display())),
+            Err(e) => {
+                log::error(&format!("failed to replace save {}: {e}", path.display()));
+                let _ = std::fs::remove_file(&tmp); // don't leave the temp behind
+            }
         }
     }
 
