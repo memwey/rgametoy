@@ -302,7 +302,21 @@ impl Inner {
         crate::storage::put_record_async(&self.storage.borrow(), record);
     }
 
-    fn read_quick_state_from_storage(&mut self) {
+    /// Load the quick-state slot. Prefers the in-memory copy: it's synchronous
+    /// and repeatable (same as the desktop frontend), so a second load of the
+    /// same save works — routing every load through an async IDB read made it
+    /// fragile, seeming to only work once. IDB is a fallback for the one case
+    /// the in-memory slot can't cover: a fresh page load before the slot has
+    /// been populated. The IDB result is cached in memory so the next load is
+    /// instant.
+    fn load_quick_state(&mut self) {
+        if let Some(qs) = self.quick_state.clone() {
+            match self.console.load_state_bytes(&qs) {
+                Ok(()) => self.set_status("loaded state"),
+                Err(e) => self.set_status(&format!("state error: {e}")),
+            }
+            return;
+        }
         if self.rom_hash.is_empty() {
             self.set_status("no save slot for this ROM");
             return;
@@ -315,7 +329,10 @@ impl Inner {
             let Ok(mut inner) = host_rc.try_borrow_mut() else { return };
             match rec.and_then(|r| r.quick_state) {
                 Some(qs) => match inner.console.load_state_bytes(&qs) {
-                    Ok(()) => inner.set_status("loaded state"),
+                    Ok(()) => {
+                        inner.quick_state = Some(qs);
+                        inner.set_status("loaded state");
+                    }
                     Err(e) => inner.set_status(&format!("state error: {e}")),
                 },
                 None => inner.set_status("no save slot for this ROM"),
@@ -404,7 +421,7 @@ impl Inner {
         }
         if self.load_pending {
             self.load_pending = false;
-            self.read_quick_state_from_storage();
+            self.load_quick_state();
         }
         if self.screenshot_pending {
             self.screenshot_pending = false;
