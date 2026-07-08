@@ -137,13 +137,20 @@ STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。�
   144 行并入 STAT 线条件即可。
 - **`intr_2_mode0/mode3/oam_ok_timing`**:见 §3.6——找到并修好了那个常量拍偏移。
 
-仍挂 4 个:`intr_2_mode0_timing_sprites`(精灵的 OBJ mode-3 惩罚要精确,现为固定 6 dot 近似,
-改动有 acid2 回归风险)、`lcdon_timing` / `lcdon_write_timing`(开屏首行特殊时序,且要连本地
-`ppu_test` 一起改)、`stat_lyc_onoff`(见下)。
-- **`stat_lyc_onoff`**:已修**关屏时 LY=LYC 比较位冻结**(见 `fix(ppu): freeze LY==LYC`),
-  还差开屏那一拍精确触发 STAT 中断(要给写入路径加中断管线)。
-- **`lcdon_*`**:开屏首行 line 0 从 mode 0 直接进 mode 3(跳过 mode 2)、且 PPU 晚 2 T——
-  需要建首帧特殊时序,精确偏移待标定。
+仍挂 4 个,本轮已用 trace + 反汇编把各自机制**精确定位**(修复都试过、因需更细的参考拍/
+算法而回退):
+
+- **`stat_lyc_onoff`**:反汇编确认失败在 **"rN intr" 轮**(开屏那拍触发 STAT 中断)。已定位
+  两个必需件:①**开屏首拍 STAT 读到 mode 0**(和 `lcdon` 同一硬件行为,`enable→mode 0` 能修好
+  前 4 轮的 STAT 读);②开屏产生 LYC 上升沿时触发 STAT 中断,但**要精确的边沿/延迟语义**——
+  立即触发会在"只读 STAT 不期望中断"的轮里**误触发**;冻结 `stat_line` 又会让该触发的轮**不触发**
+  (卡在 freeze ↔ edge 的两难)。需要 DMG 关屏期间 STAT 线 + 再开屏边沿的精确规则。
+- **`lcdon_*`**:trace 证实真机 line 0 的 STAT 先读 **mode 0** 再进 mode 3(我们读的是 mode 2);
+  模型是"`enable→mode 0` + 首行 mode 3 晚几拍",但**扫了 delay=0/2/4 都不过**,说明还有 mode 3
+  长度/VRAM 锁等更细的差异,缺该测试的精确参考拍值。
+- **`intr_2_mode0_timing_sprites`**:非精灵版已过,只差**精灵的 OBJ mode-3 惩罚**精确(现为固定
+  6 dot 近似)。需要 Pan Docs 的 OBJ penalty 算法(按 (x+SCX)%8 + 取数状态算),且改动碰渲染、
+  有 acid2/mealybug 回归风险。
 
 ### 3.4 实验教训(已回退)
 几次朝 T-cycle 精度的尝试被棘轮挡回,记录以免重蹈:
