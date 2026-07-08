@@ -15,6 +15,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::weblog;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{
@@ -113,7 +114,9 @@ pub fn init_async(
         // v1 schema: a single object store keyed by romHash.
         let params = IdbObjectStoreParameters::new();
         params.set_key_path(&JsValue::from_str("romHash"));
-        let _ = db.create_object_store_with_optional_parameters(STORE_NAME, &params);
+        if let Err(e) = db.create_object_store_with_optional_parameters(STORE_NAME, &params) {
+            weblog::error_val("IndexedDB: create object store failed", &e);
+        }
     }) as Box<dyn FnMut(Event)>);
     request.set_onupgradeneeded(Some(upgrade_closure.as_ref().unchecked_ref()));
     upgrade_closure.forget();
@@ -123,6 +126,7 @@ pub fn init_async(
         Rc::new(RefCell::new(Some(Box::new(on_unavailable))));
     let on_unavailable_for_cb = on_unavailable_cell.clone();
     let error_closure = Closure::wrap(Box::new(move |_ev: Event| {
+        weblog::error("IndexedDB open failed — saves will not persist this session");
         *slot_for_error.borrow_mut() = None;
         if let Some(f) = on_unavailable_for_cb.borrow_mut().take() {
             f();
@@ -148,21 +152,24 @@ pub fn get_record_async(
     };
     let tx = match db.transaction_with_str_and_mode(STORE_NAME, web_sys::IdbTransactionMode::Readonly) {
         Ok(t) => t,
-        Err(_) => {
+        Err(e) => {
+            weblog::error_val("IndexedDB read: open transaction failed", &e);
             on_result(None);
             return;
         }
     };
     let store = match tx.object_store(STORE_NAME) {
         Ok(s) => s,
-        Err(_) => {
+        Err(e) => {
+            weblog::error_val("IndexedDB read: object store failed", &e);
             on_result(None);
             return;
         }
     };
     let request = match store.get(&JsValue::from_str(&hash)) {
         Ok(r) => r,
-        Err(_) => {
+        Err(e) => {
+            weblog::error_val("IndexedDB read: get failed", &e);
             on_result(None);
             return;
         }
@@ -179,7 +186,13 @@ pub fn get_record_async(
         let record = if v.is_undefined() || v.is_null() {
             None
         } else {
-            js_to_record(&v).ok().flatten()
+            match js_to_record(&v) {
+                Ok(rec) => rec,
+                Err(e) => {
+                    weblog::error_val("IndexedDB: save record is corrupt, ignoring", &e);
+                    None
+                }
+            }
         };
         if let Some(f) = cb_cell.borrow_mut().take() {
             f(record);
@@ -189,23 +202,33 @@ pub fn get_record_async(
     closure.forget();
 }
 
-/// Fire-and-forget record write. Errors (if any) are silently dropped
-/// — the autosave loop is best-effort and would be noisy if it
-/// surfaced every IDB hiccup.
+/// Fire-and-forget record write. Best-effort: it doesn't wait for the write to
+/// commit, but a failure to even *start* it (no store, quota, private window…)
+/// is logged to the console — otherwise saves would silently stop persisting
+/// with no signal. (A persistent failure will repeat every autosave; that
+/// repetition is itself the signal that something is wrong.)
 pub fn put_record_async(db: &Option<IdbDatabase>, record: SaveRecord) {
     let Some(db) = db else {
         return;
     };
     let tx = match db.transaction_with_str_and_mode(STORE_NAME, web_sys::IdbTransactionMode::Readwrite) {
         Ok(t) => t,
-        Err(_) => return,
+        Err(e) => {
+            weblog::error_val("IndexedDB write: open transaction failed", &e);
+            return;
+        }
     };
     let store = match tx.object_store(STORE_NAME) {
         Ok(s) => s,
-        Err(_) => return,
+        Err(e) => {
+            weblog::error_val("IndexedDB write: object store failed", &e);
+            return;
+        }
     };
     let value = record_to_js(&record);
-    let _ = store.put(&value);
+    if let Err(e) = store.put(&value) {
+        weblog::error_val("IndexedDB write: put failed", &e);
+    }
 }
 
 // -- JS <-> Rust conversion ------------------------------------------------

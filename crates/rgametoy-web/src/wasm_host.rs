@@ -20,6 +20,7 @@ use crate::palette::{rgba_table, shade_to_rgba, PALETTES};
 use crate::rom::{cartridge_title, load_rom};
 use crate::storage::{rom_hash, SaveRecord};
 use crate::ui::{get_html_element, set_text};
+use crate::weblog;
 use web_sys::IdbDatabase;
 
 /// How many frames the rAF loop ticks when the turbo key is held. 4× is
@@ -215,7 +216,9 @@ impl Inner {
             let Ok(mut inner) = host_rc.try_borrow_mut() else { return };
             inner.console.cartridge_mut().load_ram(ram);
             if let Some(qs) = &rec.quick_state {
-                let _ = inner.console.load_state_bytes(qs);
+                if let Err(e) = inner.console.load_state_bytes(qs) {
+                    weblog::error(&format!("saved quick-state could not be restored: {e}"));
+                }
             }
             inner.quick_state = rec.quick_state.clone();
             inner.set_status("restored save");
@@ -386,8 +389,13 @@ impl Inner {
         }
         if self.screenshot_pending {
             self.screenshot_pending = false;
-            let _ = crate::screenshot::download(&self.rgba_buf);
-            self.set_status("screenshot saved");
+            match crate::screenshot::download(&self.rgba_buf) {
+                Ok(()) => self.set_status("screenshot saved"),
+                Err(e) => {
+                    weblog::error_val("screenshot download failed", &e);
+                    self.set_status("screenshot failed");
+                }
+            }
         }
         if self.palette_pending {
             self.palette_pending = false;
@@ -590,7 +598,9 @@ impl WasmHost {
             return Ok(());
         }
         let player = crate::audio::enable(self.inner.clone())?;
-        player.resume().ok();
+        if let Err(e) = player.resume() {
+            weblog::error_val("audio: failed to resume the AudioContext", &e);
+        }
         inner.audio = Some(player);
         inner.audio_enabled = true;
         inner.set_status("audio: on");
@@ -712,7 +722,9 @@ impl WasmHost {
             // (which would invalidate the callback before `load` fires).
             host_for_change.borrow_mut().rom_reader_closure = Some(reader_closure);
 
-            let _ = reader.read_as_array_buffer(&file);
+            if let Err(e) = reader.read_as_array_buffer(&file) {
+                weblog::error_val("could not read the selected ROM file", &e);
+            }
         }) as Box<dyn FnMut(Event)>);
         file_input
             .add_event_listener_with_callback("change", change_closure.as_ref().unchecked_ref())?;
@@ -864,13 +876,16 @@ impl WasmHost {
             }
             match crate::audio::enable(host_audio.clone()) {
                 Ok(player) => {
-                    player.resume().ok();
+                    if let Err(e) = player.resume() {
+                        weblog::error_val("audio: failed to resume the AudioContext", &e);
+                    }
                     h.audio = Some(player);
                     h.audio_enabled = true;
                     h.set_status("audio: on");
                     audio_btn_for_cb.set_text_content(Some("Disable audio"));
                 }
                 Err(e) => {
+                    weblog::error_val("audio init failed", &e);
                     let msg = e.as_string().unwrap_or_else(|| "audio init failed".to_string());
                     h.set_status(&format!("audio: {msg}"));
                 }

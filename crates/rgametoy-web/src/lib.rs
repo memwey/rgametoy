@@ -15,6 +15,7 @@ mod screenshot;
 mod storage;
 mod ui;
 mod wasm_host;
+mod weblog;
 
 pub use wasm_host::WasmHost;
 
