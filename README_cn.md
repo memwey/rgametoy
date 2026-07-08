@@ -2,7 +2,8 @@
 
 [English](README.md) | **中文**
 
-一个用 Rust 编写的 DMG (初代 Game Boy) 模拟器,核心逻辑不依赖第三方库(仅用 `minifb` 做窗口显示)。
+一个用 Rust 编写的 DMG (初代 Game Boy) 模拟器。仿真核心(`rgametoy-core`)**零第三方依赖**;
+桌面前端(`rgametoy-desktop`)才引入 `minifb`(窗口)和可选的 `cpal`(音频)。
 
 ## 构建与运行
 
@@ -29,18 +30,18 @@ cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍
 ```
 
 **截图**:`F2` 把当前帧按原生 160×144 存成 24-bit BMP(像素精确,适合调试),存好后在终端
-打印路径。编码器与无头的 `--example screenshot` 共用一份(`src/emulator/screenshot.rs`),
+打印路径。编码器与无头的 `-p rgametoy-desktop --example screenshot` 共用一份(`crates/rgametoy-desktop/src/emulator/screenshot.rs`),
 窗口与截图配色一致。
 
 **配色**:核心只输出 0–3 四级灰度,把灰度映射成颜色是纯前端的选择
-(`src/emulator/palette.rs`)。`F3` 在几套内置配色间循环——经典 DMG 绿,以及给四级灰度上色
+(`crates/rgametoy-desktop/src/emulator/palette.rs`)。`F3` 在几套内置配色间循环——经典 DMG 绿,以及给四级灰度上色
 的变体(grayscale、amber、ocean、berry)。截图使用当前生效的配色。默认是 DMG 绿。
 
 **显示**:窗口把**原生 160×144** 的缓冲交给 minifb 后端(macOS 上是 Metal),由 GPU 做最近邻
 放大——每帧上传的数据比在 CPU 上预放大少 16 倍,前端因此很省。窗口标题实时显示 fps、速度倍率
 和配色;加 `--features debug` 还会显示每帧 core / present 的耗时拆分。
 
-**日志**:前端信息走一个零依赖的小日志器(`src/emulator/log.rs`)——`info` 到 stdout,
+**日志**:前端信息走一个零依赖的小日志器(`crates/rgametoy-desktop/src/emulator/log.rs`)——`info` 到 stdout,
 `warn`/`error` 到 stderr,仅当输出是终端且未设 `NO_COLOR` 时才上 ANSI 颜色。测试 ROM 的
 串口输出原样打印,不加标签。
 
@@ -61,16 +62,18 @@ PPU 像素-FIFO 渲染(背景 / 窗口 / 精灵,mode 3 逐点)、OAM DMA、串�
 
 ## 架构
 
-crate 按硬件 / 宿主分层(`src/lib.rs`):`console` 是被模拟的机器,`emulator` 是驱动它的前端。
+项目是一个 Cargo **workspace**,两个 crate 按硬件 / 宿主分层。`rgametoy-core` 是被模拟的机器——
+确定性、零依赖,能编到 `wasm32`。`rgametoy-desktop` 是驱动它的原生前端(并产出 `rgametoy` 二进制);
+将来可以再加一个 `rgametoy-web` crate 作为第三个前端,复用同一份核心。
 
 ```text
-  emulator/   宿主前端 —— 窗口、输入、音频、文件(minifb / cpal)
-  ─────────   main → Emulator::run(): 读输入 → run_frame → 呈现 → 按帧节流
-              display · input · audio · screenshot · palette · log · paths
+  crates/rgametoy-desktop   原生前端 —— 窗口、输入、音频、文件(minifb / cpal)
+  ───────────────────────   main → Emulator::run(): 读输入 → run_frame → 呈现 → 按帧节流
+       emulator/            display · input · audio · screenshot · palette · log · paths
                  │  run_frame() / framebuffer()          ▲  set_buttons()
-                 ▼                                        │
-  console/    被模拟的 DMG —— 确定性,无宿主 I/O
-  ────────
+                 ▼  依赖 ↓                                │
+  crates/rgametoy-core      被模拟的 DMG —— 确定性、无宿主 I/O、可编 wasm
+  ──────────────────────
      Cpu (SM83)  ── 总线主控 ──►  MemoryBus  (地址译码,拥有下面全部外设)
         每次访存 / 内部延迟都调 bus.tick(n)  ──┐
                                               ▼  把 n 个 T-cycle 分发给:
@@ -78,12 +81,12 @@ crate 按硬件 / 宿主分层(`src/lib.rs`):`console` 是被模拟的机器,`em
      被动:    Cartridge (MBC1/3/5 + 电池)   P1 (手柄)   WRAM   HRAM
 ```
 
-- **`console`** 是被模拟的机器——无宿主 I/O、完全确定性,所以存档就是一次深拷贝
+- **`rgametoy-core`** 是被模拟的机器——无宿主 I/O、完全确定性,所以存档就是一次深拷贝
   (只读的 ROM 用 `Arc` 共享、不复制)。
 - **`Cpu` 是唯一的总线主控**:每次访存和内部延迟都调 `bus.tick(n)`,把**受时钟**的外设
   (PPU/Timer/APU/Serial)推进 `n` 个 T-cycle。**这一条 seam** 正是让读写时序可观测的关键。
   **被动**外设(卡带、手柄、RAM)只在被访问时响应。
-- **`emulator`** 每个宿主帧跑一次 `run_frame()`,再呈现 framebuffer 并节流到真实的 ~59.7 Hz。
+- **`rgametoy-desktop`** 每个宿主帧跑一次 `run_frame()`,再呈现 framebuffer 并节流到真实的 ~59.7 Hz。
 
 ## 时序
 
@@ -128,11 +131,11 @@ Blargg(`cpu_instrs` 全 11 项、`instr_timing`、`mem_timing` 均 **Passed**)�
 ```sh
 cargo test --release                                              # 灰盒模块单测
 GB_TEST_ROMS=/path/to/game-boy-test-roms \
-    cargo test --release --test rom_suite                         # mooneye 非 boot + Blargg
-cargo run --release --example run_serial  -- path/to/test.gb      # 打印串口输出(Blargg)
-cargo run --release --example run_mooneye -- path/to/test.gb      # 打印 PASS / FAIL(mooneye)
-cargo run --release --example screenshot  -- rom.gb out.bmp       # 无头渲染一帧到 BMP
-cargo run --release --example benchmark   -- rom.gb [帧数]        # 无头跑吞吐:fps + 倍速
+    cargo test --release -p rgametoy-core --test rom_suite                         # mooneye 非 boot + Blargg
+cargo run --release -p rgametoy-core --example run_serial  -- path/to/test.gb      # 打印串口输出(Blargg)
+cargo run --release -p rgametoy-core --example run_mooneye -- path/to/test.gb      # 打印 PASS / FAIL(mooneye)
+cargo run --release -p rgametoy-desktop --example screenshot  -- rom.gb out.bmp       # 无头渲染一帧到 BMP
+cargo run --release -p rgametoy-core --example benchmark   -- rom.gb [帧数]        # 无头跑吞吐:fps + 倍速
 ```
 
 ## 参考资料

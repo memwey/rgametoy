@@ -1,0 +1,12 @@
+[package]
+name = "rgametoy-core"
+description = "Emulated DMG Game Boy core (CPU/PPU/APU/timer/cartridge) — deterministic, dependency-free, wasm-ready."
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+# Read-only inspection of the running machine (state snapshots + breakpoints)
+# for calibrating against hardware test ROMs. Off by default so a release build
+# carries no debug surface. See examples/inspect.rs.
+debug = []

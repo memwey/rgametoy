@@ -90,7 +90,7 @@ def main():
     dump = shlex.split(
         os.environ.get(
             "MEALYBUG_DUMP_FB",
-            "cargo run --release --quiet --example dump_fb --",
+            "cargo run --release --quiet -p rgametoy-core --example dump_fb --",
         )
     )
     want = sys.argv[1] if len(sys.argv) > 1 else ""

@@ -2,8 +2,10 @@
 
 **English** | [中文](README_cn.md)
 
-A DMG (original Game Boy) emulator written in Rust, with no third-party libraries
-in the core logic (only `minifb` for the window).
+A DMG (original Game Boy) emulator written in Rust. The emulation core
+(`rgametoy-core`) has **zero third-party dependencies**; the desktop frontend
+(`rgametoy-desktop`) adds only `minifb` for the window and optional `cpal` for
+audio.
 
 ## Build & run
 
@@ -35,11 +37,11 @@ the `RGAMETOY_DATA_DIR` environment variable:
 
 **Screenshots**: `F2` saves the current frame at native 160×144 as a 24-bit BMP
 (pixel-exact, good for debugging) and prints the path. The encoder is shared with
-the headless `--example screenshot` (`src/emulator/screenshot.rs`), so the window
+the headless `-p rgametoy-desktop --example screenshot` (`crates/rgametoy-desktop/src/emulator/screenshot.rs`), so the window
 and the screenshots use the same colours.
 
 **Palettes**: the core only emits shade values 0–3, so mapping them to colours is
-a pure frontend choice (`src/emulator/palette.rs`). `F3` cycles through a few
+a pure frontend choice (`crates/rgametoy-desktop/src/emulator/palette.rs`). `F3` cycles through a few
 built-in palettes — the classic DMG green plus tinted variants (grayscale, amber,
 ocean, berry) that colourise the four shades. Screenshots use whichever palette is
 active. The default is DMG green.
@@ -51,7 +53,7 @@ stays cheap. The window title shows the live fps, speed multiplier, and palette;
 with `--features debug` it also shows the per-frame core-vs-present time split.
 
 **Logging**: frontend messages go through a tiny dependency-free logger
-(`src/emulator/log.rs`) — `info` to stdout, `warn`/`error` to stderr, with ANSI
+(`crates/rgametoy-desktop/src/emulator/log.rs`) — `info` to stdout, `warn`/`error` to stderr, with ANSI
 colour only when the stream is a terminal and `NO_COLOR` is unset. A test ROM's
 serial output is printed raw, never tagged.
 
@@ -77,17 +79,20 @@ mid-scanline register changes take effect). Not yet implemented: MBC3 RTC, MBC2.
 
 ## Architecture
 
-The crate mirrors the hardware / host split (`src/lib.rs`): `console` is the
-emulated machine, `emulator` is the frontend that drives it.
+The project is a Cargo **workspace** of two crates mirroring the hardware / host
+split. `rgametoy-core` is the emulated machine — deterministic, dependency-free,
+and it compiles to `wasm32`. `rgametoy-desktop` is the native frontend that
+drives it (and builds the `rgametoy` binary); a future `rgametoy-web` crate could
+be a third frontend on the same core.
 
 ```text
-  emulator/   host frontend — window, input, audio, files (minifb / cpal)
-  ─────────   main → Emulator::run(): poll input → run_frame → present → pace
-              display · input · audio · screenshot · palette · log · paths
+  crates/rgametoy-desktop   native frontend — window, input, audio, files (minifb / cpal)
+  ───────────────────────   main → Emulator::run(): poll input → run_frame → present → pace
+       emulator/            display · input · audio · screenshot · palette · log · paths
                  │  run_frame() / framebuffer()          ▲  set_buttons()
-                 ▼                                        │
-  console/    the emulated DMG — deterministic, no host I/O
-  ────────
+                 ▼  depends on ↓                          │
+  crates/rgametoy-core      the emulated DMG — deterministic, no host I/O, wasm-ready
+  ──────────────────────
      Cpu (SM83)  ── bus master ──►  MemoryBus  (decodes addresses, owns all below)
         every access / internal delay calls bus.tick(n)  ──┐
                                                             ▼  fans n T-cycles out to:
@@ -95,14 +100,14 @@ emulated machine, `emulator` is the frontend that drives it.
      passive:  Cartridge (MBC1/3/5 + battery)   P1 (joypad)   WRAM   HRAM
 ```
 
-- **`console`** is the emulated machine — no host I/O, fully deterministic, so a
+- **`rgametoy-core`** is the emulated machine — no host I/O, fully deterministic, so a
   save state is just a deep copy (the read-only ROM is shared via `Arc`, not copied).
 - The **`Cpu` is the only bus master**: every memory access and internal delay calls
   `bus.tick(n)`, which advances the *timed* peripherals (PPU/Timer/APU/Serial) by `n`
   T-cycles. That single seam is what makes read/write timing observable. The *passive*
   peripherals (cartridge, joypad, RAM) only respond to accesses.
-- **`emulator`** runs one `run_frame()` per host frame, then presents the framebuffer
-  and paces to the real ~59.7 Hz.
+- **`rgametoy-desktop`** runs one `run_frame()` per host frame, then presents the
+  framebuffer and paces to the real ~59.7 Hz.
 
 ## Timing
 
@@ -153,11 +158,11 @@ are detailed in [docs/testing.md](docs/testing.md).
 ```sh
 cargo test --release                                              # gray-box module unit tests
 GB_TEST_ROMS=/path/to/game-boy-test-roms \
-    cargo test --release --test rom_suite                         # mooneye non-boot + Blargg
-cargo run --release --example run_serial  -- path/to/test.gb      # print serial output (Blargg)
-cargo run --release --example run_mooneye -- path/to/test.gb      # print PASS / FAIL (mooneye)
-cargo run --release --example screenshot  -- rom.gb out.bmp       # headless-render one frame to BMP
-cargo run --release --example benchmark   -- rom.gb [frames]      # headless throughput: fps + xrealtime
+    cargo test --release -p rgametoy-core --test rom_suite                         # mooneye non-boot + Blargg
+cargo run --release -p rgametoy-core --example run_serial  -- path/to/test.gb      # print serial output (Blargg)
+cargo run --release -p rgametoy-core --example run_mooneye -- path/to/test.gb      # print PASS / FAIL (mooneye)
+cargo run --release -p rgametoy-desktop --example screenshot  -- rom.gb out.bmp       # headless-render one frame to BMP
+cargo run --release -p rgametoy-core --example benchmark   -- rom.gb [frames]      # headless throughput: fps + xrealtime
 ```
 
 ## References

@@ -20,7 +20,7 @@
    和真实程序、和每个测试 ROM 一样。
 2. **确实要看软件读不到的内部量时,走"调试工具提供的接口"**——`--features debug` 后面的
    `Ppu::get_mode`/`debug_state`(同一套给 `inspect`/`ppu_probe` 用的检查器),而不是自己抠字段。
-   这类测试也 `#[cfg(feature="debug")]` 门控,`cargo test --features debug` 才编译/跑;默认公共
+   这类测试也 `#[cfg(feature="debug")]` 门控,`cargo test -p rgametoy-core --features debug` 才编译/跑;默认公共
    API 保持黑盒。
 
 一个 Game Boy 的"外部可观测面"是封闭的,大多数内部时序其实能从这面直接测:例如 STAT mode
@@ -28,6 +28,8 @@
 这些是默认黑盒测试。只有 mode-3 **内部长度**(172 + 惩罚)这种软件读不到绝对值的,才放
 `ppu_test.rs` 的 `#[cfg(feature="debug")] mod debug_timing`,用 `get_mode` 观测;其可观测后果
 另由 rom_suite 的 mooneye `intr_2`/`lcdon` 黑盒兜底(见 §1.2)。
+
+这些文件都在 `crates/rgametoy-core/tests/` 下(下表路径已省略前缀)。
 
 | 位置 | 覆盖 |
 |---|---|
@@ -60,11 +62,11 @@ release bundle(本项目用 v7.0)获取。每种 ROM 的"通过信号"不同:
 | **dmg-acid2** | 渲染一张参考图,**逐像素**比对 | `examples/screenshot.rs`(转 BMP)/ `dump_fb.rs` |
 | **mealybug** | 某一特定帧的画面与参考 PNG(`*_dmg_blob.png`)**逐像素**比对 | `tools/mealybug_compare.py` |
 
-**入库的 ROM 集成测试(`tests/rom_suite.rs`)**:把**自带信号**的黑盒套件做成 `cargo test`
+**入库的 ROM 集成测试(`crates/rgametoy-core/tests/rom_suite.rs`)**:把**自带信号**的黑盒套件做成 `cargo test`
 ——设 `GB_TEST_ROMS` 指向 bundle 根就跑,没设就整体 skip(默认 `cargo test` 不受影响):
 
 ```sh
-GB_TEST_ROMS=/path/to/game-boy-test-roms cargo test --release --test rom_suite
+GB_TEST_ROMS=/path/to/game-boy-test-roms cargo test --release -p rgametoy-core --test rom_suite
 ```
 
 两个断言:mooneye acceptance **非 boot 全过**(遍历,跳过 `boot*`)、Blargg cpu/timing 串口
@@ -76,15 +78,15 @@ GB_TEST_ROMS=/path/to/game-boy-test-roms cargo test --release --test rom_suite
 用 Python 是因为 Rust std 没 inflate、解 PNG 得引三方库(违背核心不依赖三方库),而 Python
 stdlib 的 zlib 直接能解。
 
-**调试器(`--features debug`)**:项目内检查器(见 `src/console/debug.rs`),`Console::snapshot()`
+**调试器(`--features debug`)**:项目内检查器(见 `crates/rgametoy-core/src/debug.rs`),`Console::snapshot()`
 一次拿到整机可观测状态(含寄存器看不到的 PPU 内部 mode/dot、STAT 线、LY==LYC 锁存),
 `run_until` 打断点。`examples/inspect.rs` 是它的 CLI:
 
 ```sh
-cargo run --release --features debug --example inspect -- rom.gb break 0x48    # 跑到 PC 后打全快照
-cargo run --release --features debug --example inspect -- rom.gb watch 0x48 6  # 每次命中 PC 打快照
-cargo run --release --features debug --example inspect -- rom.gb line 0        # 某扫描线的 mode/dot 变化
-cargo run --release --features debug --example inspect -- rom.gb dumpat PC A L  # 命中 PC 时 dump 一段内存
+cargo run --release --features debug -p rgametoy-core --example inspect -- rom.gb break 0x48    # 跑到 PC 后打全快照
+cargo run --release --features debug -p rgametoy-core --example inspect -- rom.gb watch 0x48 6  # 每次命中 PC 打快照
+cargo run --release --features debug -p rgametoy-core --example inspect -- rom.gb line 0        # 某扫描线的 mode/dot 变化
+cargo run --release --features debug -p rgametoy-core --example inspect -- rom.gb dumpat PC A L  # 命中 PC 时 dump 一段内存
 ```
 `stat_lyc_onoff`、`lcdon_*` 就是靠它逐步定位后修好的。
 
@@ -321,14 +323,14 @@ export GB_TEST_ROMS=/path/to/game-boy-test-roms
 cargo test --release
 
 # 3) ROM 集成套件(mooneye 非 boot 全过 + Blargg)
-cargo test --release --test rom_suite
+cargo test --release -p rgametoy-core --test rom_suite
 
 # 4) mealybug 相似度记分板
 tools/mealybug_compare.py            # 全 24 个;可加 name-substr 只跑一撮
 
 # 5) 单个 ROM 手动看
-cargo run --release --example run_serial  -- "$GB_TEST_ROMS/blargg/cpu_instrs/cpu_instrs.gb"
-cargo run --release --example run_mooneye -- "$GB_TEST_ROMS/mooneye-test-suite/acceptance/timer/tima_reload.gb"
+cargo run --release -p rgametoy-core --example run_serial  -- "$GB_TEST_ROMS/blargg/cpu_instrs/cpu_instrs.gb"
+cargo run --release -p rgametoy-core --example run_mooneye -- "$GB_TEST_ROMS/mooneye-test-suite/acceptance/timer/tima_reload.gb"
 ```
 
 > `MEALYBUG_DUMP_FB` 可覆盖脚手架里 dump 帧缓冲的命令(适配需直连工具链二进制的环境)。

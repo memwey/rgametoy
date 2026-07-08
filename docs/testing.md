@@ -27,7 +27,7 @@ Two rules:
    through "an interface the debug tooling provides"** — `Ppu::get_mode`/`debug_state`
    behind `--features debug` (the same inspection surface `inspect`/`ppu_probe` use),
    not by poking a field. Such tests are also `#[cfg(feature="debug")]`-gated and
-   only compile/run under `cargo test --features debug`; the default public API
+   only compile/run under `cargo test -p rgametoy-core --features debug`; the default public API
    stays black-box.
 
 A Game Boy's "externally observable surface" is closed, so most internal timing can
@@ -38,6 +38,8 @@ the **internal** mode-3 length (172 + penalty), whose absolute value software ca
 read, lives in `ppu_test.rs`'s `#[cfg(feature="debug")] mod debug_timing` and is
 observed via `get_mode`; its observable consequences are also covered black-box by
 rom_suite's mooneye `intr_2`/`lcdon` (see §1.2).
+
+These files live under `crates/rgametoy-core/tests/` (paths below are shortened).
 
 | Location | Covers |
 |---|---|
@@ -71,12 +73,12 @@ project uses v7.0). Each ROM signals "pass" differently:
 | **dmg-acid2** | renders a reference image, compared **pixel by pixel** | `examples/screenshot.rs` (to BMP) / `dump_fb.rs` |
 | **mealybug** | one specific frame compared **pixel by pixel** to the reference PNG (`*_dmg_blob.png`) | `tools/mealybug_compare.py` |
 
-**Committed ROM integration test (`tests/rom_suite.rs`)**: makes the **self-signalling**
+**Committed ROM integration test (`crates/rgametoy-core/tests/rom_suite.rs`)**: makes the **self-signalling**
 black-box suites a `cargo test` — set `GB_TEST_ROMS` to the bundle root to run them,
 leave it unset to skip the whole thing (default `cargo test` is unaffected):
 
 ```sh
-GB_TEST_ROMS=/path/to/game-boy-test-roms cargo test --release --test rom_suite
+GB_TEST_ROMS=/path/to/game-boy-test-roms cargo test --release -p rgametoy-core --test rom_suite
 ```
 
 Two assertions: mooneye acceptance **all non-boot pass** (walks the tree, skips
@@ -93,16 +95,16 @@ data**. It is Python because Rust's std has no inflate, so decoding a PNG would 
 in a third-party crate (against the "no third-party libs in the core"), whereas
 Python's stdlib zlib decodes it directly.
 
-**Debugger (`--features debug`)**: an in-project inspector (see `src/console/debug.rs`).
+**Debugger (`--features debug`)**: an in-project inspector (see `crates/rgametoy-core/src/debug.rs`).
 `Console::snapshot()` grabs the whole machine's observable state at once (including
 the PPU internal mode/dot, STAT line and LY==LYC latch that registers don't show),
 and `run_until` sets a breakpoint. `examples/inspect.rs` is its CLI:
 
 ```sh
-cargo run --release --features debug --example inspect -- rom.gb break 0x48    # run to PC, print a full snapshot
-cargo run --release --features debug --example inspect -- rom.gb watch 0x48 6  # snapshot on each PC hit
-cargo run --release --features debug --example inspect -- rom.gb line 0        # mode/dot changes on a scanline
-cargo run --release --features debug --example inspect -- rom.gb dumpat PC A L  # hex-dump a memory range at a PC hit
+cargo run --release --features debug -p rgametoy-core --example inspect -- rom.gb break 0x48    # run to PC, print a full snapshot
+cargo run --release --features debug -p rgametoy-core --example inspect -- rom.gb watch 0x48 6  # snapshot on each PC hit
+cargo run --release --features debug -p rgametoy-core --example inspect -- rom.gb line 0        # mode/dot changes on a scanline
+cargo run --release --features debug -p rgametoy-core --example inspect -- rom.gb dumpat PC A L  # hex-dump a memory range at a PC hit
 ```
 `stat_lyc_onoff` and `lcdon_*` were located step by step with it.
 
@@ -411,14 +413,14 @@ export GB_TEST_ROMS=/path/to/game-boy-test-roms
 cargo test --release
 
 # 3) ROM integration suite (mooneye non-boot all pass + Blargg)
-cargo test --release --test rom_suite
+cargo test --release -p rgametoy-core --test rom_suite
 
 # 4) mealybug similarity scoreboard
 tools/mealybug_compare.py            # all 24; add a name-substr to run a subset
 
 # 5) Inspect a single ROM by hand
-cargo run --release --example run_serial  -- "$GB_TEST_ROMS/blargg/cpu_instrs/cpu_instrs.gb"
-cargo run --release --example run_mooneye -- "$GB_TEST_ROMS/mooneye-test-suite/acceptance/timer/tima_reload.gb"
+cargo run --release -p rgametoy-core --example run_serial  -- "$GB_TEST_ROMS/blargg/cpu_instrs/cpu_instrs.gb"
+cargo run --release -p rgametoy-core --example run_mooneye -- "$GB_TEST_ROMS/mooneye-test-suite/acceptance/timer/tima_reload.gb"
 ```
 
 > `MEALYBUG_DUMP_FB` overrides the command the scaffold uses to dump the framebuffer

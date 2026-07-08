@@ -1,0 +1,24 @@
+[package]
+name = "rgametoy-desktop"
+description = "Native (desktop) frontend for the rgametoy Game Boy emulator."
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+# Real-time audio output via cpal. Off by default so a plain build pulls in no
+# audio stack; the core always produces samples regardless.
+audio = ["dep:cpal"]
+# Forward the core's read-only inspection surface (adds the per-frame timing
+# read-out to the window title, among other things).
+debug = ["rgametoy-core/debug"]
+
+[dependencies]
+rgametoy-core = { workspace = true }
+minifb = { workspace = true }
+cpal = { workspace = true, optional = true }
+
+# The package is `rgametoy-desktop`, but the binary users run is `rgametoy`.
+[[bin]]
+name = "rgametoy"
+path = "src/main.rs"

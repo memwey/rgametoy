@@ -1,23 +1,12 @@
-[package]
-name = "rgametoy"
+[workspace]
+resolver = "2"
+members = ["crates/rgametoy-core", "crates/rgametoy-desktop"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = []
-# Real-time audio output via cpal. Off by default so the core stays
-# dependency-free; the APU always produces samples regardless.
-audio = ["dep:cpal"]
-# Read-only inspection of the running machine (state snapshots + breakpoints),
-# for calibrating against hardware test ROMs. Off by default so the release
-# build carries no debug surface; enable with `--features debug`. See
-# `examples/inspect.rs`.
-debug = []
-
-[dependencies]
+[workspace.dependencies]
+rgametoy-core = { path = "crates/rgametoy-core" }
 minifb = "0.28"
-cpal = { version = "0.18", optional = true }
-
-[lib]
-name = "rgametoy"
-path = "src/lib.rs"
+cpal = "0.18"

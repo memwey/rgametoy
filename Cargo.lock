@@ -757,11 +757,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "rgametoy"
+name = "rgametoy-core"
+version = "0.1.0"
+
+[[package]]
+name = "rgametoy-desktop"
 version = "0.1.0"
 dependencies = [
  "cpal",
  "minifb",
+ "rgametoy-core",
 ]
 
 [[package]]
