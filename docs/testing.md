@@ -61,7 +61,8 @@ cargo run --release --features debug --example inspect -- rom.gb line 0       # 
 
 几个判定细节:
 - **mooneye** 的斐波那契签名是所有硬件测试通用的"通过"约定;`run_mooneye` 跑
-  240 帧后读寄存器判定。它**只给 PASS/FAIL**,调试具体差异要另 dump 全寄存器。
+  跑若干帧后读寄存器判定(240 帧够大多数;`intr_2_mode0_timing_sprites` 要 ~2900 帧,
+  批量脚本 240 不过再兜 3000)。它**只给 PASS/FAIL**,调试具体差异要另 dump 全寄存器。
 - **mealybug** 的效果只在**一帧**上出现:CPU 做完一串按拍对齐的行内写入后执行
   `ld b,b`(断点)就停,之后的帧会**不带效果**重绘。所以要扫描帧号找到"测试帧",
   再和参考图逐像素比;参考 PNG 是 4 级灰度,按 `round((255-gray)/85)` 映射到我们的
@@ -85,7 +86,7 @@ cargo run --release --features debug --example inspect -- rom.gb line 0       # 
 
 渲染出完整参考笑脸(FIFO 重写前后字节一致,佐证渲染正确)。
 
-### 2.3 mooneye acceptance —— 59 / 75
+### 2.3 mooneye acceptance —— 63 / 75(非 boot 全过 ✅)
 
 | 分组 | 成绩 | 备注 |
 |---|---|---|
@@ -93,10 +94,13 @@ cargo run --release --features debug --example inspect -- rom.gb line 0       # 
 | instr | 1/1 ✅ | |
 | interrupts | 1/1 ✅ | `ie_push` 已修(压栈盖 IE 重算向量) |
 | oam_dma | 3/3 ✅ | `reg_read`、`sources-GS` 已修 |
-| timer | 12/13 | 仅剩 `rapid_toggle` |
-| ppu | 9/12 | 已修 `hblank_ly_scx`、`intr_2_0/mode0/mode3/oam_ok`、`vblank_stat_intr`、`stat_lyc_onoff`;挂 `intr_2_mode0_sprites`、`lcdon_*` |
+| timer | 13/13 ✅ | `rapid_toggle` 已修(TAC 写落 T3,timer 内重放,见 §3.2) |
+| ppu | 12/12 ✅ | 最后三个 `lcdon_*`(§3.3)与 `intr_2_mode0_sprites`(§3.7)已修 |
 | serial | 0/1 | `boot_sclk_align`(需 boot 时序) |
 | root | 30/41 | 只剩 boot 类(见下) |
+
+> 注意 `intr_2_mode0_timing_sprites` 要跑 ~2900 帧(100+ 个 testcase 逐个等帧),
+> 批量脚本先跑 240 帧、不过再跑 3000 帧兜底。
 
 root 组仅剩 11 个失败,**全是 Boot 状态**:`boot_regs-{dmg0,mgb,sgb,sgb2}`、`boot_div*`、
 `boot_hwio*`,校验**特定机型**开机后的寄存器/IO 状态——我们只做 DMG、也不跑真实 boot ROM,
@@ -118,9 +122,10 @@ root 组仅剩 11 个失败,**全是 Boot 状态**:`boot_regs-{dmg0,mgb,sgb,sgb2
 
 ## 3. 遗留问题
 
-一句话:凡是 **M-cycle 粒度**的都过了(Blargg、dmg-acid2、大部分 mooneye);凡是要求
-**T-cycle / 逐点精确**落点的,还没到位。这些不是"改几行"能干净修的,普遍**标定密集、
-有回归风险**,故单独列出。
+一句话:**mooneye 非 boot 全过**——M-cycle 粒度与逐点(dot/T)粒度的验收测试都已到位
+(rapid_toggle 的亚 M-cycle TAC 写、lcdon 的开屏首行逐点表、sprites 的惩罚聚合都拿下)。
+剩下 boot 类(不在范围)与 mealybug(mode-3 行内特效的**具体锁存 dot**,最严一档)。
+下面按子系统记录"怎么修的/学到什么",供后续 mealybug 攻坚复用方法。
 
 ### 3.1 控制流读时序 —— 已修(源总线相关的 DMA 阻塞)
 mooneye 这些 timing 测试用 **OAM DMA 当示波器**:把栈指进 OAM、或让指令从 ROM 取指,
@@ -133,21 +138,22 @@ mooneye 这些 timing 测试用 **OAM DMA 当示波器**:把栈指进 OAM、或�
 → 指令跑飞。改成按源分总线阻塞(`dma_conflicts`,仅 OAM 恒锁)后,**整簇 9 个读时序全绿**,
 oam_dma 组不回归(见 `fix(bus): OAM DMA blocks only the bus that conflicts with its source`)。
 
-### 3.2 `rapid_toggle`(timer 亚周期)—— 已量化到"差一圈",并证明非相位问题
-用 `inspect` 精确量化:真机期望 timer 中断在 **BC=FFD9**(从 FFFF 递减 38 圈)服务,
-我们在 **BC=FFD8**(39 圈)——**恰好晚一圈**。溯源:TIMA 从 F0 需 16 次毛刺增量溢出,
-毛刺在"关 TAC 且选中位(freq00→bit9=DIV bit1)为高"的那圈发生;我们的第 16 次增量比真机
-**晚一圈**落地(真机在 FFDA 圈就攒满,我们要到 FFD9 圈)。差别在计数器穿过 bit9 边界(512)
-的**亚拍相位**。
+### 3.2 `rapid_toggle` —— 已修:TAC 写落 T3,在 timer 内部重放
+用 `inspect` 量化:真机 timer 中断在 **BC=FFD9** 服务,我们晚一圈(FFD8)。逐圈手推
+整个 ROM 的毛刺增量表后锁定缺的那次:第 29 圈的 **enable 写**落在计数器 2047(bit9 即将
+下降)——真机的写落在 **T3**(该 M-cycle 最后一拍**之前**),使能后的输入亲历 2047→2048
+的下降沿 → TIMA 增量;我们写落 T4(计数器已 2048),错过。补上后 #16 提前到第 37 圈的
+disable → 恰好 FFD9。
 
-两个实验把它钉死为"需要亚 M-cycle 分辨率",不是能靠调参修的:
-- **写落点 T3 vs T4**:把 `Cpu::write` 从"tick(4) 后写"(T4)改成 tick(3)-写-tick(1)(T3),
-  **回归了 `call/push/rst/call_cc2` 四个时序测试、且没修 rapid_toggle**——反证写就落在 **T4**。
-- **计数器相位扫描**:在 DIV 复位处注入相位偏移 0/±1/…/8 扫描。**没有任何偏移能同时**让
-  rapid_toggle=FFD9 且 `tim00/01/10/11` 仍绿:偏移 0–3 时 tim* 全绿但 rapid_toggle 恒 FFD8;
-  一旦偏到能翻 rapid_toggle(≥8 或负),tim* 全挂。**证明**我们的相位对 tim* 是正确的,
-  rapid_toggle 要的是 TAC 写那一刻计数器在 M-cycle **内部**的精确落点(亚 T-cycle 计数器模型),
-  与简单相位互斥——属架构级改动、碰其余 12 个 timer 测试,回归风险高。
+修法(commit `fix(timer): TAC stores land on T3`):**不动全局写落点**(T3 全局写实测回归
+`call/push/rst/call_cc2` 四个,反证总线写就在 T4),在 `Timer::write_register(FF07)` 里
+**重放硬件顺序**——记录每拍前的 `prev_counter`,把写按"落在 counter-1、再以新 TAC 重算
+最后一拍边沿"计算,与已跑过的"T4-老 TAC"边沿对账补差。相位扫描实验(0/±1/…都无法同时
+满足 rapid_toggle 与 tim*)正是佐证:普通增量相位本来就对,只有 **TAC 写的观测点**要提前一拍。
+timer 组 13/13。
+
+坑:重放最初用 `counter-1` 反推"上一拍",冷调用(单测直接 `write_register`、无先行 tick)
+时回绕出 0xFFFF 的幻影高位 → 两个 timer 单测挂;改为**记录真实 prev_counter** 后干净。
 
 ### 3.3 PPU 组(mooneye `ppu` 4 挂 + mealybug mode-3)
 STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。本轮修好五个:
@@ -165,20 +171,37 @@ STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。�
   `DI` 之前,tick 路径会晚一两拍)。inspect 直接看到 `lyc_m/stat_l`,几步就锁定了 patch 未生效 +
   冻结丢失两个 bug。
 
-仍挂 2 个(已查资料/参考实现精确定位机制):
+**`lcdon_timing-GS` + `lcdon_write_timing-GS` —— 已修**(commit `fix(ppu): dot-exact first
+line after LCD enable`)。方法是本项目目前最完整的一次"从测试源码解码期望"标定:两测试各
+3 个 pass 错开 1 nop(=4T),给出 **4-dot 分辨率**的 157 个期望值;把 `.s` 期望表逐值解码后
+反推出自洽模型,再用 `inspect dumpat` 直接 dump 测试自己的结果缓冲对表,一次全中:
 
-- **`intr_2_mode0_timing_sprites`**:**OBJ mode-3 惩罚已按硬件公式修好**(`11 - min(5,(x+SCX)%8)`,
-  X=0 恒 11;`ppu_probe` 逐点验证 mode3 = 172 + 精确惩罚,acid2 字节不变、零回归,见
-  `fix(ppu): hardware-accurate OBJ mode-3 penalty`)。但此测试**仍挂**——用 `inspect` 追出真因
-  是 **CPU/PPU 相位**:测量所在的那条 mode-2 中断行(LY=68)上**并没有精灵**(唯一在屏精灵在
-  line 66),即 CPU 醒在了"错的行"。惩罚精确与否不影响该测量,故已不是惩罚问题,而是醒来落点的
-  相位——同 §3.2/§3.6 一类的亚周期落点。
-- **`lcdon_*`**:trace 证实真机 line 0 的 STAT 先读 **mode 0** 再进 mode 3(`enable→mode 0` 已就位);
-  但**扫 delay=0..6 都不过**。**参考 gameroy 实现**:开屏后 line 0 走一段偏移过的 OAM search、
-  **mode 3 落在 cycle 84**(非普通行的 80),整条 line 0 计时用 `-7/-8` 偏移表达"晚 2 T";其
-  OAM/VRAM 逐拍锁窗与 mooneye 的期望值(`accessible@0,17,130,244 / locked@60,110,174,224`,跨
-  line0/line1)难以用我们**基于 dot 的行计时**干净复现,需把首行改成 gameroy 那套 clock 记账
-  ——是对 PPU 行计时的重写,碰 acid2/intr_2/stat,回归风险高。
+- **开屏首行(line 0)**:行长 **452**(LY=1 落在 dot 452);无 OAM scan(假 mode 0),
+  画点从 dot 80 起;且该行的 mode 转换**无可见滞后**(internal==visible,仅此行)。
+- **OAM/VRAM 锁不对称**:**读锁在内部沿上锁**(scan/fetch 一开始就占总线)、**在可见沿解锁**;
+  **写只看可见 mode**——由此自然涌现行首 dot 0..3 与 mode2→3 交接 dot 80..83 的**写穿窗**
+  (硬件实测行为,期望表钉死)。
+- **LYC match 行首消隐**:LY 变化后头 4 dot 读 0,dot 4 重新锁存比较结果。
+
+### 3.7 `intr_2_mode0_timing_sprites` —— 已修:惩罚聚合 + fetcher 气泡 + 可见滞后
+最后一个非 boot 失败,一条测试钉死三处缺陷(commit `fix(ppu): exact OBJ penalty
+aggregation + bubble-free fetcher push`)。它的 ~100 个 testcase 各编码
+`floor(总惩罚/4)`,把期望表逐条验算后反推出:
+
+1. **惩罚聚合**:同一 **OAM X** 只有第一个精灵付 BG-fetch 中止费
+   (`11 - min(5,(x+SCX)%8)`,X=0 恒 11),后续同 X 精灵只付 6-dot 取数
+   (10 个叠 X=0 = 5+6×10=65,不是 110)。键控必须用 OAM X 而非触发像素:
+   X=0 与 X=8 都在像素 0 触发,却各付全额。
+2. **停摆确定性**:精灵停摆期间 BG fetcher **继续运行**(惩罚公式已包含其损失),
+   mode 3 恰好延长惩罚本身;旧的"冻结 fetcher"模型会漏 1–2 dot 的涌现气泡。
+3. **Push 逐拍重试**:fetcher 末段 push 无需访存、每 dot 重试(奇数惩罚 11/7 曾
+   留下 1-dot 奇偶气泡);基线 warmup 相应 5→6,无精灵行保持 172。
+4. **Drawing→HBlank 的 STAT 可见滞后是 1 dot 而非 4**:此测试的奇数惩罚打破了其它
+   所有测试留下的模 4 采样简并(其余测试对该滞后模 4 不敏感,4 是巧合解)。
+
+之前"测量行 LY=68 无精灵"的结论是**误读**:精灵 Y=$52 覆盖屏幕行 66..73,line 68 在内;
+测量行 68 正是测试设计(等 LY=66 → mode0 → mode3(line 67)→ HALT → line 68 的 mode-2 中断)。
+`ppu_probe` 12 种配置(单个/叠加/散开)全部逐 dot 命中硬件表。
 
 ### 3.4 实验教训(已回退)
 几次朝 T-cycle 精度的尝试被棘轮挡回,记录以免重蹈:
@@ -199,17 +222,20 @@ STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。�
 ### M-cycle 级 ↔ 亚周期级 光谱
 
 ```
-已过(含定向标定拿下的)              仍挂(亚周期落点,有回归风险)
+已过(含定向标定拿下的)              仍挂
 ──────────────────────────────────┼────────────────────────────────────────────
-Blargg cpu_instrs/instr/mem_timing  rapid_toggle(亚 M-cycle 计数器,非相位)
-dmg-acid2                           intr_2_mode0_sprites(醒来行相位;惩罚已修)
-mooneye: bits/instr/interrupts      lcdon_*(开屏首行 clock 记账,参 gameroy)
-oam_dma 全组;控制流读/写时序          mealybug mode-3(取数/寄存器锁存点)
-OBJ mode-3 惩罚(11-min(5,(x+SCX)%8))
-timer(除 rapid_toggle);ei_sequence
-PPU mode-3 长度 / hblank_ly_scx
-PPU vblank_stat_intr / stat_lyc_onoff
-PPU intr_2_0/mode0/mode3/oam_ok  ← STAT mode 滞后 4 dot 标定
+Blargg cpu_instrs/instr/mem_timing  boot_*(需真实 boot ROM / 其它机型,不在范围)
+dmg-acid2                           boot_sclk_align(同上)
+mooneye: bits/instr/interrupts      mealybug mode-3(取数/寄存器锁存点,0/24)
+oam_dma 全组;控制流读/写时序
+timer 全组(含 rapid_toggle:TAC 写 T3 重放)
+ei_sequence
+PPU 全组:mode-3 长度(172+惩罚聚合)
+  hblank_ly_scx / vblank_stat_intr
+  stat_lyc_onoff / intr_2 全簇
+  lcdon_*(开屏首行 452 dot + 锁不对称)
+  OBJ 惩罚聚合(首个付全额、同 X 后续付 6)
+STAT mode 滞后:出 scan/blank 4 dot、出 Drawing 1 dot
 ```
 
 > **T-cycle 迁移状态**:CPU 时间推进已收敛到单一 T-cycle seam(`Cpu::tick_t`,见
