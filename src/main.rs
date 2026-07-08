@@ -1,4 +1,4 @@
-use rgametoy::emulator::Emulator;
+use rgametoy::emulator::{log, Emulator};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -18,11 +18,11 @@ fn main() -> ExitCode {
     let mut emulator = Emulator::new();
     if let Some(speed) = args.get(2).and_then(|s| s.parse::<f64>().ok()) {
         emulator.set_turbo_speed(speed);
-        println!("fast-forward (Tab) speed: {speed}x");
+        log::info(&format!("fast-forward (Tab) at {speed}x"));
     }
 
     if let Err(e) = emulator.load_rom(&rom_path) {
-        eprintln!("failed to load ROM '{rom_path}': {e}");
+        log::error(&format!("failed to load ROM {rom_path:?}: {e}"));
         return ExitCode::FAILURE;
     }
 
