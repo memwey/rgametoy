@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-#[cfg(feature = "persistence")]
+#[cfg(feature = "serialize")]
 use crate::state::{write_u16_le, write_u32_le, write_u8, Reader, SaveStateError};
 
 const ROM_BANK_SIZE: usize = 0x4000; // 16 KB
@@ -21,7 +21,7 @@ pub enum MbcKind {
 /// in save states; the new tag must be different from any reserved/in-use value
 /// to keep older reads distinguishable. Kept separate from `MbcKind` so
 /// refactors that re-order the enum don't silently shift the on-disk values.
-#[cfg(feature = "persistence")]
+#[cfg(feature = "serialize")]
 #[repr(u8)]
 #[derive(Clone, Copy)]
 enum MbcKindTag {
@@ -31,7 +31,7 @@ enum MbcKindTag {
     Mbc5 = 5,
 }
 
-#[cfg(feature = "persistence")]
+#[cfg(feature = "serialize")]
 impl MbcKind {
     fn tag(self) -> u8 {
         match self {
@@ -43,7 +43,7 @@ impl MbcKind {
     }
 }
 
-#[cfg(feature = "persistence")]
+#[cfg(feature = "serialize")]
 impl MbcKindTag {
     fn from(b: u8) -> Option<MbcKind> {
         match b {
@@ -308,31 +308,13 @@ impl Cartridge {
         banks.next_power_of_two() - 1
     }
 
-    /// Snapshot of the external RAM (cartridge save data). Returns an empty
-    /// vector if the cartridge has no RAM. The caller writes this to whatever
-    /// sink it likes (file, IndexedDB, …).
-    #[cfg(feature = "persistence")]
-    pub fn save_ram_bytes(&self) -> Vec<u8> {
-        self.ram.clone()
-    }
-
-    /// Restore external RAM from a save-data snapshot. Extra bytes are
-    /// ignored; a shorter snapshot leaves the remainder zeroed. Use this
-    /// *after* [`Cartridge::from_bytes`] so the RAM size matches the ROM
-    /// header. Clears the dirty flag on success.
-    #[cfg(feature = "persistence")]
-    pub fn load_ram_bytes(&mut self, bytes: &[u8]) {
-        let n = self.ram.len().min(bytes.len());
-        self.ram[..n].copy_from_slice(&bytes[..n]);
-        self.ram_dirty = false;
-    }
 
     /// Append the cartridge's mutable state to `out`. The ROM image itself is
     /// *not* serialized — the host is expected to have already loaded the
     /// same ROM into the console before loading a state. Saving the ROM
     /// would multiply every state save by 32 KB..8 MB and add a
     /// copyright-attribution hazard.
-    #[cfg(feature = "persistence")]
+    #[cfg(feature = "serialize")]
     pub fn write_state(&self, out: &mut Vec<u8>) {
         write_u8(out, self.kind.tag());
         write_u8(out, self.has_battery as u8);
@@ -347,7 +329,7 @@ impl Cartridge {
     /// Parse the cartridge's mutable state out of a save-state blob. The
     /// caller is responsible for having already populated `self.rom` via
     /// [`Cartridge::from_bytes`] (so `self.ram.len()` matches the header).
-    #[cfg(feature = "persistence")]
+    #[cfg(feature = "serialize")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         let kind = MbcKindTag::from(r.read_u8()?)
             .ok_or(SaveStateError::UnknownCartridgeKind(0))?;

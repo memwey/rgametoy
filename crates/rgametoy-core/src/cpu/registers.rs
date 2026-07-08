@@ -7,7 +7,7 @@
 //! *is* the data), while everything outside the `cpu` module goes through the
 //! typed accessors below (the 8-bit halves do the byte extract/insert).
 
-#[cfg(feature = "persistence")]
+#[cfg(feature = "serialize")]
 use crate::state::{write_u16_le, Reader, SaveStateError};
 
 #[derive(Clone)]
@@ -209,7 +209,7 @@ impl Default for Registers {
 impl Registers {
     /// Append the six 16-bit pairs (12 bytes total) in the order AF, BC, DE,
     /// HL, SP, PC.
-    #[cfg(feature = "persistence")]
+    #[cfg(feature = "serialize")]
     pub fn write_state(&self, out: &mut Vec<u8>) {
         write_u16_le(out, self.af);
         write_u16_le(out, self.bc);
@@ -219,7 +219,7 @@ impl Registers {
         write_u16_le(out, self.pc);
     }
 
-    #[cfg(feature = "persistence")]
+    #[cfg(feature = "serialize")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.af = r.read_u16_le()?;
         self.bc = r.read_u16_le()?;

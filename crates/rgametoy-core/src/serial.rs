@@ -2,7 +2,7 @@
 //! 0xFF; the bytes the program sends are captured so test ROMs (which print
 //! their results over serial) can be observed.
 
-#[cfg(feature = "persistence")]
+#[cfg(feature = "serialize")]
 use crate::state::{write_u16_le, write_u32_le, write_u8, Reader, SaveStateError};
 
 /// T-cycles for one byte: 8 bits at the 8192 Hz DMG serial clock (512 T-cycles
@@ -88,7 +88,7 @@ impl Default for Serial {
 impl Serial {
     /// Append the serial state: data, control, countdown, then the captured
     /// output bytes (length-prefixed because the buffer is variable-sized).
-    #[cfg(feature = "persistence")]
+    #[cfg(feature = "serialize")]
     pub fn write_state(&self, out: &mut Vec<u8>) {
         write_u8(out, self.data);
         write_u8(out, self.control);
@@ -99,7 +99,7 @@ impl Serial {
         }
     }
 
-    #[cfg(feature = "persistence")]
+    #[cfg(feature = "serialize")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.data = r.read_u8()?;
         self.control = r.read_u8()?;

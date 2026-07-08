@@ -1,7 +1,7 @@
 //! Work RAM (WRAM, 0xC000-0xDFFF, 8 KB) and its echo mirror (0xE000-0xFDFF).
 //! On DMG this is a single flat bank (bank switching only exists on CGB).
 
-#[cfg(feature = "persistence")]
+#[cfg(feature = "serialize")]
 use crate::state::{write_bytes, Reader, SaveStateError};
 
 const WRAM_SIZE: usize = 0x2000; // 8KB
@@ -37,12 +37,12 @@ impl Default for Wram {
 // -- Save state -------------------------------------------------------------
 
 impl Wram {
-    #[cfg(feature = "persistence")]
+    #[cfg(feature = "serialize")]
     pub fn write_state(&self, out: &mut Vec<u8>) {
         write_bytes(out, &self.data);
     }
 
-    #[cfg(feature = "persistence")]
+    #[cfg(feature = "serialize")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         let bytes = r.read_exact(WRAM_SIZE)?;
         self.data.copy_from_slice(bytes);

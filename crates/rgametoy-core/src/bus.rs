@@ -5,7 +5,7 @@ use crate::interrupts::InterruptType;
 use crate::joypad::P1;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
-#[cfg(feature = "persistence")]
+#[cfg(feature = "serialize")]
 use crate::state::{write_u16_le, write_u8, Reader, SaveStateError};
 use crate::timer::Timer;
 use crate::wram::Wram;
@@ -297,7 +297,7 @@ impl Bus for BusView<'_> {
 // Only the system's own parts; the cartridge is serialized separately by
 // `Console` (it is a distinct, externally-owned unit).
 
-#[cfg(feature = "persistence")]
+#[cfg(feature = "serialize")]
 impl System {
     pub fn write_state(&self, out: &mut Vec<u8>) {
         self.wram.write_state(out);

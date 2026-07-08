@@ -10,8 +10,9 @@ default = []
 # for calibrating against hardware test ROMs. Off by default so a release build
 # carries no debug surface. See examples/inspect.rs.
 debug = []
-# Whole-machine save-state serialization to a portable byte blob, plus the
-# battery-RAM snapshot API. This is an *emulator* convenience (a real Game Boy
-# can't snapshot itself), so it's opt-in: the featureless core is just the
-# machine. Frontends that persist saves (desktop, web) enable it.
-persistence = []
+# Whole-machine save-state serialization: turn the entire machine into a
+# portable byte blob and back. An *emulator* convenience (a real Game Boy can't
+# snapshot itself), so it's opt-in — the featureless core is just the machine.
+# The core only serializes; a frontend decides whether to persist the bytes or
+# hold them in memory. Frontends that offer save-states (desktop, web) enable it.
+serialize = []

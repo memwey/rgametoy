@@ -57,7 +57,7 @@ PPU 像素-FIFO 渲染(背景 / 窗口 / 精灵,mode 3 逐点)、OAM DMA、串�
 默认关闭。
 
 另外支持**快进/加速**(按住 Tab,倍率可配)和**即时存档 / 读档 (save state)**
-(F5/F7,整机深拷贝到内存槽,零依赖)。PPU 是**像素 FIFO**(mode 3 逐点、行内改寄存器
+(F5/F7,把整机序列化成字节、存到内存槽)。PPU 是**像素 FIFO**(mode 3 逐点、行内改寄存器
 生效)。尚未实现:MBC3 RTC、MBC2。
 
 ## 架构
@@ -74,14 +74,15 @@ PPU 像素-FIFO 渲染(背景 / 窗口 / 精灵,mode 3 逐点)、OAM DMA、串�
                  ▼  依赖 ↓                                │
   crates/rgametoy-core      被模拟的 DMG —— 确定性、无宿主 I/O、可编 wasm
   ──────────────────────
-     Cpu (SM83)  ── 总线主控 ──►  MemoryBus  (地址译码,拥有下面全部外设)
+     Cpu (SM83) ─ 总线主控 ─► BusView = System + 插入的 Cartridge (地址译码)
         每次访存 / 内部延迟都调 bus.tick(n)  ──┐
                                               ▼  把 n 个 T-cycle 分发给:
-     受时钟:  Ppu (像素 FIFO)   Timer (DIV/TIMA)   Apu (4 声道)   Serial (串口)
-     被动:    Cartridge (MBC1/3/5 + 电池)   P1 (手柄)   WRAM   HRAM
+     System 受时钟:  Ppu (像素 FIFO)   Timer (DIV/TIMA)   Apu (4 声道)   Serial (串口)
+     System 被动:    P1 (手柄)   WRAM   HRAM
+     Cartridge:       MBC1/3/5 + 电池 —— 独立单元,power_on 插入,总线每步借用(不归 System 拥有)
 ```
 
-- **`rgametoy-core`** 是被模拟的机器——无宿主 I/O、完全确定性。存档(可选的 `persistence`
+- **`rgametoy-core`** 是被模拟的机器——无宿主 I/O、完全确定性。存档(可选的 `serialize`
   feature —— 真 GB 没法给自己拍快照,所以无 feature 的裸核心*就是*那台机器)把整机序列化成
   一段可移植字节;只读的 ROM 用 `Arc` 共享、从不拷进去。
 - **`Cpu` 是唯一的总线主控**:每次访存和内部延迟都调 `bus.tick(n)`,把**受时钟**的外设

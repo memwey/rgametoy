@@ -1,8 +1,8 @@
 //! Black-box save-state restore checks via the observable machine (CPU
 //! registers, WRAM) — a complement to the byte-level round-trip in
-//! `savestate_bytes_test.rs`. Gated on the `persistence` feature that provides
+//! `savestate_bytes_test.rs`. Gated on the `serialize` feature that provides
 //! the save-state API.
-#![cfg(feature = "persistence")]
+#![cfg(feature = "serialize")]
 
 extern crate rgametoy_core;
 

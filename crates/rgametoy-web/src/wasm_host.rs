@@ -213,7 +213,7 @@ impl Inner {
             let Some(rec) = rec else { return };
             let Some(ram) = &rec.ram else { return };
             let Ok(mut inner) = host_rc.try_borrow_mut() else { return };
-            inner.console.cartridge_mut().load_ram_bytes(ram);
+            inner.console.cartridge_mut().load_ram(ram);
             if let Some(qs) = &rec.quick_state {
                 let _ = inner.console.load_state_bytes(qs);
             }
@@ -245,7 +245,7 @@ impl Inner {
         if self.rom_hash.is_empty() {
             return;
         }
-        let ram = self.console.cartridge().save_ram_bytes();
+        let ram = self.console.cartridge().ram().to_vec();
         // Only write if the cartridge actually has RAM — saves with no
         // external RAM are pointless, and the dirty-flag check (a
         // separate code path) would not be triggered anyway.
@@ -271,7 +271,7 @@ impl Inner {
         let record = SaveRecord {
             rom_hash: self.rom_hash.clone(),
             rom_title: self.title.clone(),
-            ram: self.console.cartridge().save_ram_bytes().into(),
+            ram: self.console.cartridge().ram().to_vec().into(),
             quick_state: Some(bytes),
             updated_at: js_sys::Date::now(),
         };

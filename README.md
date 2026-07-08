@@ -73,8 +73,8 @@ counters). The APU emulation core is pure Rust and always compiled; real audio
 output goes through the `audio` feature (cpal), off by default.
 
 Also supports **fast-forward** (hold Tab, configurable multiplier) and **instant
-save / load state** (F5/F7, a deep copy of the whole machine to an in-memory
-slot, zero-dependency). The PPU is a **pixel FIFO** (dot-by-dot in mode 3, so
+save / load state** (F5/F7, a serialized snapshot of the whole machine held in an
+in-memory slot). The PPU is a **pixel FIFO** (dot-by-dot in mode 3, so
 mid-scanline register changes take effect). Not yet implemented: MBC3 RTC, MBC2.
 
 ## Architecture
@@ -93,15 +93,17 @@ be a third frontend on the same core.
                  ▼  depends on ↓                          │
   crates/rgametoy-core      the emulated DMG — deterministic, no host I/O, wasm-ready
   ──────────────────────
-     Cpu (SM83)  ── bus master ──►  MemoryBus  (decodes addresses, owns all below)
+     Cpu (SM83) ─ bus master ─► BusView = System + inserted Cartridge (decodes addrs)
         every access / internal delay calls bus.tick(n)  ──┐
                                                             ▼  fans n T-cycles out to:
-     timed:    Ppu (pixel FIFO)   Timer (DIV/TIMA)   Apu (4 ch)   Serial (link)
-     passive:  Cartridge (MBC1/3/5 + battery)   P1 (joypad)   WRAM   HRAM
+     System, timed:    Ppu (pixel FIFO)   Timer (DIV/TIMA)   Apu (4 ch)   Serial (link)
+     System, passive:  P1 (joypad)   WRAM   HRAM
+     Cartridge:        MBC1/3/5 + battery — a separate unit inserted at power_on,
+                       borrowed by the bus per step (not owned by System)
 ```
 
 - **`rgametoy-core`** is the emulated machine — no host I/O, fully deterministic.
-  Save-states (the opt-in `persistence` feature — a real Game Boy can't snapshot
+  Save-states (the opt-in `serialize` feature — a real Game Boy can't snapshot
   itself, so the featureless core is *just* the machine) serialize the whole
   machine to a portable byte blob; the read-only ROM is shared via `Arc`, never
   copied into it.
