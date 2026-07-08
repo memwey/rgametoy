@@ -58,6 +58,8 @@ pub struct AudioPlayer {
     _stream: cpal::Stream,
     queue: SharedQueue,
     resampler: Resampler,
+    /// Reused across frames so `queue` allocates nothing on the hot path.
+    resampled: Vec<f32>,
     device_rate: u32,
 }
 
@@ -71,7 +73,8 @@ impl AudioPlayer {
         let config = device.default_output_config().ok()?;
 
         let sample_format = config.sample_format();
-        let device_rate = config.sample_rate().0;
+        // cpal 0.18: SampleRate is a plain u32 alias (no more newtype `.0`).
+        let device_rate = config.sample_rate();
         let channels = config.channels() as usize;
         let stream_config: cpal::StreamConfig = config.into();
 
@@ -97,6 +100,7 @@ impl AudioPlayer {
             _stream: stream,
             queue,
             resampler: Resampler::new(source_rate, device_rate),
+            resampled: Vec::new(),
             device_rate,
         })
     }
@@ -108,13 +112,13 @@ impl AudioPlayer {
     /// Resample APU samples to the device rate and queue them, dropping them if
     /// playback has fallen ~1 s behind.
     pub fn queue(&mut self, samples: &[f32]) {
-        let mut resampled = Vec::new();
-        self.resampler.process(samples, &mut resampled);
+        self.resampled.clear();
+        self.resampler.process(samples, &mut self.resampled);
 
         let mut queue = self.queue.lock().unwrap();
         let max = self.device_rate as usize * 2; // ~1 s of interleaved stereo
         if queue.len() < max {
-            queue.extend(resampled);
+            queue.extend(self.resampled.iter().copied());
         }
     }
 }
@@ -124,12 +128,14 @@ fn build_stream<T>(
     config: &cpal::StreamConfig,
     queue: SharedQueue,
     channels: usize,
-) -> Result<cpal::Stream, cpal::BuildStreamError>
+) -> Result<cpal::Stream, cpal::Error>
 where
     T: SizedSample + FromSample<f32>,
 {
+    // cpal 0.18: StreamConfig is passed by value (it is `Copy`) and the build
+    // error is the unified `cpal::Error`.
     device.build_output_stream(
-        config,
+        *config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             let mut queue = queue.lock().unwrap();
             for frame in data.chunks_mut(channels.max(1)) {
@@ -146,7 +152,7 @@ where
                 }
             }
         },
-        |err| eprintln!("audio stream error: {err}"),
+        |err| crate::emulator::log::error(&format!("audio stream: {err}")),
         None,
     )
 }

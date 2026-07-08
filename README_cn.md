@@ -36,6 +36,14 @@ cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍
 (`src/emulator/palette.rs`)。`F3` 在几套内置配色间循环——经典 DMG 绿,以及给四级灰度上色
 的变体(grayscale、amber、ocean、berry)。截图使用当前生效的配色。默认是 DMG 绿。
 
+**显示**:窗口把**原生 160×144** 的缓冲交给 minifb 后端(macOS 上是 Metal),由 GPU 做最近邻
+放大——每帧上传的数据比在 CPU 上预放大少 16 倍,前端因此很省。窗口标题实时显示 fps、速度倍率
+和配色;加 `--features debug` 还会显示每帧 core / present 的耗时拆分。
+
+**日志**:前端信息走一个零依赖的小日志器(`src/emulator/log.rs`)——`info` 到 stdout,
+`warn`/`error` 到 stderr,仅当输出是终端且未设 `NO_COLOR` 时才上 ANSI 颜色。测试 ROM 的
+串口输出原样打印,不加标签。
+
 支持的卡带:无 MBC (32KB)、MBC1、MBC3(不含 RTC)、MBC5,含外部 RAM 与 bank 切换。
 带电池的卡带把外部 RAM 存档持久化到 `saves/<卡带文件名>-<内容哈希>.sav`——文件名可读、
 哈希绑 ROM 内容(同名不同 ROM 不撞),`.sav` 本身是裸 SRAM(与其它模拟器通用)。启动时自动
@@ -58,7 +66,7 @@ crate 按硬件 / 宿主分层(`src/lib.rs`):`console` 是被模拟的机器,`em
 ```text
   emulator/   宿主前端 —— 窗口、输入、音频、文件(minifb / cpal)
   ─────────   main → Emulator::run(): 读输入 → run_frame → 呈现 → 按帧节流
-              display · input · audio · screenshot · palette · paths
+              display · input · audio · screenshot · palette · log · paths
                  │  run_frame() / framebuffer()          ▲  set_buttons()
                  ▼                                        │
   console/    被模拟的 DMG —— 确定性,无宿主 I/O

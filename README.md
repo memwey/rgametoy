@@ -44,6 +44,17 @@ built-in palettes — the classic DMG green plus tinted variants (grayscale, amb
 ocean, berry) that colourise the four shades. Screenshots use whichever palette is
 active. The default is DMG green.
 
+**Display**: the window presents the *native* 160×144 buffer and lets minifb's
+backend (Metal on macOS) upscale it on the GPU with nearest-neighbour sampling —
+16× less data to upload each frame than pre-scaling on the CPU, so the frontend
+stays cheap. The window title shows the live fps, speed multiplier, and palette;
+with `--features debug` it also shows the per-frame core-vs-present time split.
+
+**Logging**: frontend messages go through a tiny dependency-free logger
+(`src/emulator/log.rs`) — `info` to stdout, `warn`/`error` to stderr, with ANSI
+colour only when the stream is a terminal and `NO_COLOR` is unset. A test ROM's
+serial output is printed raw, never tagged.
+
 Supported cartridges: no-MBC (32 KB), MBC1, MBC3 (no RTC) and MBC5, with external
 RAM and bank switching. A battery-backed cartridge persists its external RAM to
 `saves/<rom-file-name>-<content-hash>.sav` — the name is human-readable and the
@@ -72,7 +83,7 @@ emulated machine, `emulator` is the frontend that drives it.
 ```text
   emulator/   host frontend — window, input, audio, files (minifb / cpal)
   ─────────   main → Emulator::run(): poll input → run_frame → present → pace
-              display · input · audio · screenshot · palette · paths
+              display · input · audio · screenshot · palette · log · paths
                  │  run_frame() / framebuffer()          ▲  set_buttons()
                  ▼                                        │
   console/    the emulated DMG — deterministic, no host I/O

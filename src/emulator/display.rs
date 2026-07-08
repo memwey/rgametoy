@@ -2,18 +2,20 @@ use crate::console::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::emulator::palette;
 use minifb::{Key, Scale, Window, WindowOptions};
 
-/// Integer upscale factor. Each Game Boy pixel becomes a SCALE×SCALE block, so
-/// the image stays crisp (nearest-neighbour) with the 10:9 aspect ratio intact.
-pub const SCALE: usize = 4;
+/// Window upscale factor. minifb's backend (Metal on macOS) uploads a texture
+/// the size of the buffer we hand it, then upscales it to the window on the GPU
+/// with nearest-neighbour sampling. So we present the *native* 160×144 buffer
+/// and let the GPU do the 4× scale — 16× less data to upload each frame than a
+/// pre-scaled 640×576 buffer, and no CPU scaling loop. X4 → a crisp 640×576
+/// window at the DMG's 10:9 aspect.
+const SCALE: Scale = Scale::X4;
 
-const WINDOW_WIDTH: usize = SCREEN_WIDTH * SCALE;
-const WINDOW_HEIGHT: usize = SCREEN_HEIGHT * SCALE;
-
-/// The host window. Owns presentation only — the integer upscale and the
-/// shade→colour mapping live here; raw key state is exposed for the input
+/// The host window. Owns presentation only — the shade→colour mapping lives
+/// here (the GPU handles the upscale); raw key state is exposed for the input
 /// module to map. The active palette (see [`palette`]) can be cycled at runtime.
 pub struct Display {
     window: Window,
+    /// Native 160×144 ARGB frame; minifb/the GPU upscales it to the window.
     buffer: Vec<u32>,
     /// Index into [`palette::PALETTES`], and its precomputed opaque-ARGB form.
     palette_idx: usize,
@@ -22,42 +24,35 @@ pub struct Display {
 
 impl Display {
     pub fn new() -> Display {
-        // Scale::X1: we do our own integer scaling into a window-sized buffer,
-        // which keeps the factor a plain integer (not tied to minifb's 2^n
-        // Scale) and the pixels perfectly square.
+        // Scale::X4 sizes the window to 160×144 × 4 = 640×576; the default
+        // ScaleMode::Stretch fills it from our native buffer (exact 4×, so
+        // nearest-neighbour stays pixel-perfect).
         let options = WindowOptions {
-            scale: Scale::X1,
+            scale: SCALE,
             resize: false,
             ..WindowOptions::default()
         };
 
-        let window = Window::new("rgametoy", WINDOW_WIDTH, WINDOW_HEIGHT, options)
+        let window = Window::new("rgametoy", SCREEN_WIDTH, SCREEN_HEIGHT, options)
             .unwrap_or_else(|e| panic!("{}", e));
 
         let argb = palette::to_argb(&palette::PALETTES[0].1);
         Display {
             window,
-            buffer: vec![argb[0]; WINDOW_WIDTH * WINDOW_HEIGHT],
+            buffer: vec![argb[0]; SCREEN_WIDTH * SCREEN_HEIGHT],
             palette_idx: 0,
             argb,
         }
     }
 
-    /// Present a frame given as 160×144 shade values (0-3), upscaled SCALE×.
+    /// Present a frame given as 160×144 shade values (0-3). Maps each shade to
+    /// its palette colour; the GPU upscales the native-resolution buffer.
     pub fn present(&mut self, framebuffer: &[u8]) {
-        for y in 0..SCREEN_HEIGHT {
-            for x in 0..SCREEN_WIDTH {
-                let color = self.argb[(framebuffer[y * SCREEN_WIDTH + x] & 0x03) as usize];
-                for dy in 0..SCALE {
-                    let base = (y * SCALE + dy) * WINDOW_WIDTH + x * SCALE;
-                    for dx in 0..SCALE {
-                        self.buffer[base + dx] = color;
-                    }
-                }
-            }
+        for (dst, &shade) in self.buffer.iter_mut().zip(framebuffer) {
+            *dst = self.argb[(shade & 0x03) as usize];
         }
         self.window
-            .update_with_buffer(&self.buffer, WINDOW_WIDTH, WINDOW_HEIGHT)
+            .update_with_buffer(&self.buffer, SCREEN_WIDTH, SCREEN_HEIGHT)
             .unwrap();
     }
 
