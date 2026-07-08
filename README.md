@@ -80,10 +80,14 @@ cargo run --release --example screenshot  -- rom.gb out.bmp       # 无头渲染
 * [DawnGB](https://github.com/akatsuki105/dawngb)
 * [Azayaka](https://github.com/7thSamurai/Azayaka)
 * [Rugby](https://github.com/kaplanz/rugby)
-* [GameRoy](https://github.com/Rodrigodd/gameroy)
+* [GameRoy](https://github.com/Rodrigodd/gameroy) —— 参考其开屏首行(line 0 mode 3 落 cycle 84)与 OBJ 惩罚实现
 * [jgb](https://github.com/jsgroth/jgb)
 * [Mooneye GB](https://github.com/Gekkio/mooneye-gb)
 * [GateBoy](https://github.com/aappleby/MetroBoy)
-### 表现测试
-* [dmg-acid2](https://github.com/mattcurrie/dmg-acid2)
-* [Mealybug Tearoom Tests](https://github.com/mattcurrie/mealybug-tearoom-tests)
+* [SameBoy](https://github.com/LIJI32/SameBoy) —— 高精度参考,标定开屏首行(lcdon)时序时对照
+### 测试 ROM 套件
+* [c-sp/game-boy-test-roms](https://github.com/c-sp/game-boy-test-roms) —— 下列各套件的打包发布(本项目取 v7.0,经 `GB_TEST_ROMS` 喂给 `rom_suite`)
+* [Blargg's gb-test-roms](https://github.com/retrio/gb-test-roms) —— `cpu_instrs` / `instr_timing` / `mem_timing`(串口判定)
+* [mooneye-test-suite](https://github.com/Gekkio/mooneye-test-suite) —— CPU/PPU/timer 逐周期精度验收;解码其 `.s` 期望表标定了 `lcdon` / `intr_2` / `rapid_toggle`
+* [dmg-acid2](https://github.com/mattcurrie/dmg-acid2) —— PPU 渲染一张参考笑脸,逐像素比对
+* [Mealybug Tearoom Tests](https://github.com/mattcurrie/mealybug-tearoom-tests) —— mode-3 行内改寄存器,逐像素比对(见 `tools/mealybug_compare.py`)
