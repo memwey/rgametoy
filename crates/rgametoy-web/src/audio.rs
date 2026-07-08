@@ -53,8 +53,8 @@ impl Resampler {
 }
 
 /// Bundles the AudioContext plus the ScriptProcessorNode's lifetime. Both
-/// are kept alive for the page's lifetime; the closure lives in
-/// `Inner::audio_closure` so the GC can find it.
+/// are kept alive for the page's lifetime; the `onaudioprocess` closure is
+/// `forget()`-leaked in [`enable`] (audio is brought up at most once).
 pub struct AudioPlayer {
     pub ctx: AudioContext,
     #[allow(dead_code)]
@@ -73,11 +73,11 @@ const RESAMPLE_BUF_CAP: usize = 16384;
 /// buffer. The caller passes in the shared `Rc<RefCell<Inner>>` so the
 /// callback can run frames on the same `Console` the rAF loop is reading.
 ///
-/// Returns the live `AudioPlayer` (kept in `Inner::audio` so the GC
-/// doesn't reap the AudioContext) plus the closure stashed in
-/// `Inner::audio_closure`. The context is *not* resumed — modern browsers
-/// gate `AudioContext` on a user gesture, so the UI exposes an "Enable
-/// audio" button that calls `AudioPlayer::resume` after the click.
+/// Returns the live `AudioPlayer` (kept in `Inner::audio` so the GC doesn't
+/// reap the AudioContext); the `onaudioprocess` closure is leaked internally.
+/// The context is *not* resumed — modern browsers gate `AudioContext` on a
+/// user gesture, so the UI exposes an "Enable audio" button that calls
+/// `AudioPlayer::resume` after the click.
 pub fn enable(
     inner: Rc<RefCell<crate::wasm_host::Inner>>,
 ) -> Result<AudioPlayer, JsValue> {
@@ -89,7 +89,7 @@ pub fn enable(
     let node = ctx.create_script_processor_with_buffer_size_and_number_of_input_channels_and_number_of_output_channels(2048, 0, 2)?;
     node.connect_with_audio_node(&ctx.destination())?;
 
-    let host: Rc<RefCell<crate::wasm_host::Inner>> = inner.clone();
+    let host: Rc<RefCell<crate::wasm_host::Inner>> = inner;
     // The APU's output rate is fixed, so read it once and build a *persistent*
     // resampler: recreating it per callback would reset its phase (`pos`/`prev`)
     // and click at every buffer boundary. The output buffer is reused too.
@@ -159,8 +159,10 @@ pub fn enable(
     // pattern requires `as_ref().unchecked_ref()`.
     node.set_onaudioprocess(Some(closure.as_ref().unchecked_ref()));
 
-    // Stash so the closure outlives this call.
-    inner.borrow_mut().audio_closure = Some(closure);
+    // Leak the closure so it outlives this call. Audio is enabled at most once
+    // per page (the button early-returns once `audio_enabled`), so this is a
+    // bounded, one-time leak — no need to park it in a field on `Inner`.
+    closure.forget();
 
     Ok(AudioPlayer {
         ctx,

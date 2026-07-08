@@ -10,8 +10,12 @@ use std::rc::Rc;
 use rgametoy_core::cartridge::Cartridge;
 use rgametoy_core::Console;
 use wasm_bindgen::closure::Closure;
+use wasm_bindgen::convert::FromWasmAbi;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{CanvasRenderingContext2d, Event, HtmlCanvasElement, HtmlInputElement, KeyboardEvent};
+use web_sys::{
+    CanvasRenderingContext2d, Event, EventTarget, HtmlCanvasElement, HtmlInputElement,
+    KeyboardEvent,
+};
 
 use crate::audio::AudioPlayer;
 use crate::canvas::{get_canvas, get_element_by_id, present, RGBA_LEN};
@@ -60,6 +64,37 @@ fn frames_to_run(accum_ms: f64, dt_ms: f64) -> (u32, f64) {
     (n, accum)
 }
 
+/// Register a page-lifetime event listener whose handler receives the event,
+/// leaking the closure so it stays valid for the document's lifetime. Every
+/// listener wired here is set once at startup and never removed, so `forget()`
+/// is a bounded one-time leak — the same lifetime the old `Inner::*_closure`
+/// keep-alive fields provided, without the per-listener bookkeeping.
+fn on_event<E: FromWasmAbi + 'static>(
+    target: &impl AsRef<EventTarget>,
+    event: &str,
+    cb: impl FnMut(E) + 'static,
+) -> Result<(), JsValue> {
+    let closure = Closure::wrap(Box::new(cb) as Box<dyn FnMut(E)>);
+    target
+        .as_ref()
+        .add_event_listener_with_callback(event, closure.as_ref().unchecked_ref())?;
+    closure.forget();
+    Ok(())
+}
+
+/// [`on_event`] for a `click` handler that ignores the event object.
+fn on_click(
+    target: &impl AsRef<EventTarget>,
+    cb: impl FnMut() + 'static,
+) -> Result<(), JsValue> {
+    let closure = Closure::wrap(Box::new(cb) as Box<dyn FnMut()>);
+    target
+        .as_ref()
+        .add_event_listener_with_callback("click", closure.as_ref().unchecked_ref())?;
+    closure.forget();
+    Ok(())
+}
+
 /// The requestAnimationFrame closure slot: kept in an `Rc<RefCell>` so the
 /// closure can re-arm itself each frame without being dropped.
 type RafSlot = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
@@ -98,9 +133,6 @@ pub struct Inner {
     pub audio_enabled: bool,
     /// Holds the AudioContext / ScriptProcessorNode for the page lifetime.
     pub audio: Option<AudioPlayer>,
-    /// Closure passed to `ScriptProcessorNode::set_onaudioprocess`. Stashed
-    /// in `Inner` so the JS engine doesn't drop it after the call returns.
-    pub audio_closure: Option<Closure<dyn FnMut(web_sys::Event)>>,
     /// IndexedDB connection. `None` until `onsuccess` fires (or
     /// permanently if the open errored). Shared with the IDB callbacks
     /// so the slot is filled in async — the host never blocks on IDB.
@@ -126,21 +158,14 @@ pub struct Inner {
     pub frame_accum_ms: f64,
     pub last_tick_ms: f64,
 
-    // Closures that must outlive any single JS callback. They go in `Inner`
-    // (rather than in `WasmHost`) so a future `Rc<RefCell<Inner>>` clone
-    // dropped elsewhere doesn't end the callback's lifetime early.
+    // Closures that must outlive any single JS callback but can't just be
+    // `forget()`-leaked because they're re-created after startup: the rAF
+    // closure re-arms itself through this slot, and the ROM `FileReader`
+    // handler is rebuilt on every file pick. The one-shot startup listeners
+    // (buttons, keyboard) are registered via `on_click`/`on_event`, which
+    // leak their closure once instead of parking it in a field here.
     pub raf_slot: RafSlot,
-    pub load_button_closure: Option<Closure<dyn FnMut()>>,
-    pub rom_change_closure: Option<Closure<dyn FnMut(Event)>>,
     pub rom_reader_closure: Option<Closure<dyn FnMut(Event)>>,
-    pub keydown_closure: Option<Closure<dyn FnMut(KeyboardEvent)>>,
-    pub keyup_closure: Option<Closure<dyn FnMut(KeyboardEvent)>>,
-    pub blur_closure: Option<Closure<dyn FnMut(Event)>>,
-    pub audio_button_closure: Option<Closure<dyn FnMut()>>,
-    pub pause_button_closure: Option<Closure<dyn FnMut()>>,
-    pub reset_button_closure: Option<Closure<dyn FnMut()>>,
-    pub palette_button_closure: Option<Closure<dyn FnMut()>>,
-    pub screenshot_button_closure: Option<Closure<dyn FnMut()>>,
 }
 
 impl Inner {
@@ -168,7 +193,6 @@ impl Inner {
             quick_state: None,
             audio_enabled: false,
             audio: None,
-            audio_closure: None,
             storage: Rc::new(RefCell::new(None)),
             host_rc: None,
             rom_hash: String::new(),
@@ -178,17 +202,7 @@ impl Inner {
             frame_accum_ms: 0.0,
             last_tick_ms: 0.0,
             raf_slot: Rc::new(RefCell::new(None)),
-            load_button_closure: None,
-            rom_change_closure: None,
             rom_reader_closure: None,
-            keydown_closure: None,
-            keyup_closure: None,
-            blur_closure: None,
-            audio_button_closure: None,
-            pause_button_closure: None,
-            reset_button_closure: None,
-            palette_button_closure: None,
-            screenshot_button_closure: None,
         })
     }
 
@@ -679,18 +693,12 @@ impl WasmHost {
         // input's onchange handler then runs as if the user had picked a
         // file from the OS file dialog.
         let input_for_click: HtmlInputElement = file_input.clone();
-        let click_closure = Closure::wrap(Box::new(move || {
-            input_for_click.click();
-        }) as Box<dyn FnMut()>);
-        button.add_event_listener_with_callback(
-            "click",
-            click_closure.as_ref().unchecked_ref(),
-        )?;
+        on_click(&button, move || input_for_click.click())?;
 
         // Change on #rom-input → read file → load_rom.
         let host_for_change: Rc<RefCell<Inner>> = self.inner.clone();
         let file_for_change: HtmlInputElement = file_input.clone();
-        let change_closure = Closure::wrap(Box::new(move |_event: Event| {
+        on_event(&file_input, "change", move |_event: Event| {
             let files = match file_for_change.files() {
                 Some(f) => f,
                 None => return,
@@ -731,21 +739,16 @@ impl WasmHost {
                     reader_closure.as_ref().unchecked_ref(),
                 )
                 .unwrap();
-            // Stash the reader closure on the host so it isn't dropped
-            // (which would invalidate the callback before `load` fires).
+            // Unlike the one-shot startup listeners, this reader is rebuilt on
+            // every file pick, so it's parked in a field (and replaced next
+            // time) rather than leaked — otherwise each ROM load would leak a
+            // closure. Dropping it would invalidate the callback before `load`.
             host_for_change.borrow_mut().rom_reader_closure = Some(reader_closure);
 
             if let Err(e) = reader.read_as_array_buffer(&file) {
                 weblog::error_val("could not read the selected ROM file", &e);
             }
-        }) as Box<dyn FnMut(Event)>);
-        file_input
-            .add_event_listener_with_callback("change", change_closure.as_ref().unchecked_ref())?;
-
-        // Stash so they don't get dropped.
-        let mut inner = self.inner.borrow_mut();
-        inner.load_button_closure = Some(click_closure);
-        inner.rom_change_closure = Some(change_closure);
+        })?;
         Ok(())
     }
 
@@ -793,27 +796,19 @@ impl WasmHost {
     fn wire_keyboard(&self) -> Result<(), JsValue> {
         let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
         let host_for_kd: Rc<RefCell<Inner>> = self.inner.clone();
-        let kd_closure = Closure::wrap(Box::new(move |ev: KeyboardEvent| {
+        on_event(&window, "keydown", move |ev: KeyboardEvent| {
             host_for_kd.borrow_mut().on_keydown(&ev);
-        }) as Box<dyn FnMut(KeyboardEvent)>);
-        window.add_event_listener_with_callback("keydown", kd_closure.as_ref().unchecked_ref())?;
+        })?;
 
         let host_for_ku: Rc<RefCell<Inner>> = self.inner.clone();
-        let ku_closure = Closure::wrap(Box::new(move |ev: KeyboardEvent| {
+        on_event(&window, "keyup", move |ev: KeyboardEvent| {
             host_for_ku.borrow_mut().on_keyup(&ev);
-        }) as Box<dyn FnMut(KeyboardEvent)>);
-        window.add_event_listener_with_callback("keyup", ku_closure.as_ref().unchecked_ref())?;
+        })?;
 
         let host_for_blur: Rc<RefCell<Inner>> = self.inner.clone();
-        let blur_closure = Closure::wrap(Box::new(move |_ev: Event| {
+        on_event(&window, "blur", move |_ev: Event| {
             host_for_blur.borrow_mut().on_blur();
-        }) as Box<dyn FnMut(Event)>);
-        window.add_event_listener_with_callback("blur", blur_closure.as_ref().unchecked_ref())?;
-
-        let mut inner = self.inner.borrow_mut();
-        inner.keydown_closure = Some(kd_closure);
-        inner.keyup_closure = Some(ku_closure);
-        inner.blur_closure = Some(blur_closure);
+        })?;
         Ok(())
     }
 
@@ -830,50 +825,30 @@ impl WasmHost {
         // Pause — toggles the `paused` field. The rAF loop still runs
         // (so the canvas keeps repainting), it just skips `run_frame`.
         let host_pause: Rc<RefCell<Inner>> = self.inner.clone();
-        let pause_closure = Closure::wrap(Box::new(move || {
+        on_click(&get_html_element(&doc, "pause-button")?, move || {
             let mut h = host_pause.borrow_mut();
             h.paused = !h.paused;
             let state = if h.paused { "paused" } else { "running" };
             h.set_status(state);
-        }) as Box<dyn FnMut()>);
-        let pause_btn = get_html_element(&doc, "pause-button")?;
-        pause_btn.add_event_listener_with_callback(
-            "click",
-            pause_closure.as_ref().unchecked_ref(),
-        )?;
+        })?;
 
         // Reset — same effect as the DMG power-on sequence.
         let host_reset: Rc<RefCell<Inner>> = self.inner.clone();
-        let reset_closure = Closure::wrap(Box::new(move || {
+        on_click(&get_html_element(&doc, "reset-button")?, move || {
             host_reset.borrow_mut().reset_pending = true;
-        }) as Box<dyn FnMut()>);
-        let reset_btn = get_html_element(&doc, "reset-button")?;
-        reset_btn.add_event_listener_with_callback(
-            "click",
-            reset_closure.as_ref().unchecked_ref(),
-        )?;
+        })?;
 
         // Cycle palette — same as pressing Digit3.
         let host_pal: Rc<RefCell<Inner>> = self.inner.clone();
-        let pal_closure = Closure::wrap(Box::new(move || {
+        on_click(&get_html_element(&doc, "palette-button")?, move || {
             host_pal.borrow_mut().palette_pending = true;
-        }) as Box<dyn FnMut()>);
-        let pal_btn = get_html_element(&doc, "palette-button")?;
-        pal_btn.add_event_listener_with_callback(
-            "click",
-            pal_closure.as_ref().unchecked_ref(),
-        )?;
+        })?;
 
         // Screenshot — same as pressing Digit2.
         let host_shot: Rc<RefCell<Inner>> = self.inner.clone();
-        let shot_closure = Closure::wrap(Box::new(move || {
+        on_click(&get_html_element(&doc, "screenshot-button")?, move || {
             host_shot.borrow_mut().screenshot_pending = true;
-        }) as Box<dyn FnMut()>);
-        let shot_btn = get_html_element(&doc, "screenshot-button")?;
-        shot_btn.add_event_listener_with_callback(
-            "click",
-            shot_closure.as_ref().unchecked_ref(),
-        )?;
+        })?;
 
         // Enable audio — the only button that needs to know its own
         // element so it can relabel itself. Web Audio policies require
@@ -882,7 +857,7 @@ impl WasmHost {
         let host_audio: Rc<RefCell<Inner>> = self.inner.clone();
         let audio_btn: web_sys::HtmlElement = get_html_element(&doc, "audio-button")?;
         let audio_btn_for_cb: web_sys::HtmlElement = audio_btn.clone();
-        let audio_closure = Closure::wrap(Box::new(move || {
+        on_click(&audio_btn, move || {
             let mut h = host_audio.borrow_mut();
             if h.audio_enabled {
                 return;
@@ -903,18 +878,7 @@ impl WasmHost {
                     h.set_status(&format!("audio: {msg}"));
                 }
             }
-        }) as Box<dyn FnMut()>);
-        audio_btn.add_event_listener_with_callback(
-            "click",
-            audio_closure.as_ref().unchecked_ref(),
-        )?;
-
-        let mut inner = self.inner.borrow_mut();
-        inner.pause_button_closure = Some(pause_closure);
-        inner.reset_button_closure = Some(reset_closure);
-        inner.palette_button_closure = Some(pal_closure);
-        inner.screenshot_button_closure = Some(shot_closure);
-        inner.audio_button_closure = Some(audio_closure);
+        })?;
         Ok(())
     }
 }
