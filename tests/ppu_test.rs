@@ -14,6 +14,8 @@ fn enabled_ppu() -> Ppu {
 #[test]
 fn ppu_oam_scan_lasts_80_dots() {
     let mut ppu = enabled_ppu();
+    ppu.tick(200); ppu.tick(200); ppu.tick(56);
+    assert_eq!(ppu.ly, 1);
     assert_eq!(ppu.get_mode(), PpuMode::OamScan);
 
     ppu.tick(79);

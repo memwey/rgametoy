@@ -266,7 +266,12 @@ impl Bus for MemoryBus {
                 self.dma_source = value;
                 self.dma_delay = 8;
             }
-            0xFF40..=0xFF4B => self.ppu.write_register(addr, value),
+            0xFF40..=0xFF4B => {
+                self.ppu.write_register(addr, value);
+                if self.ppu.take_stat_irq() {
+                    self.if_register |= InterruptType::LCDStat.to_bit();
+                }
+            }
             0xFF03 | 0xFF08..=0xFF0E | 0xFF4C..=0xFF7F => {}
             0xFF80..=0xFFFE => self.hram.write_byte(addr, value),
             0xFFFF => self.ie_register = value,

@@ -18,6 +18,7 @@ pub const SCREEN_HEIGHT: usize = 144;
 
 const OAM_DOTS: u16 = 80;
 const LINE_DOTS: u16 = 456;
+const LCDON_DELAY: u16 = 2;
 
 // Interrupt request bits (matches the IF register layout).
 const INT_VBLANK: u8 = 0x01;
@@ -101,6 +102,11 @@ pub struct Ppu {
     sprite_delay: u8,       // dots left in an in-progress sprite fetch
     sprite_index: usize,    // line_sprites slot being fetched
     warmup: u8,             // fetcher startup stall at the start of mode 3
+    lcd_on_line0: bool,
+    /// A STAT interrupt raised by a register write (LCD enable / LYC / STAT),
+    /// pending fold into IF by the bus. Register writes are outside the per-dot
+    /// tick path, so their rising edges are raised here.
+    stat_irq_pending: bool,
 }
 
 impl Ppu {
@@ -147,7 +153,27 @@ impl Ppu {
             sprite_delay: 0,
             sprite_index: 0,
             warmup: 0,
+            lcd_on_line0: false,
+            stat_irq_pending: false,
         }
+    }
+
+    /// Take a STAT interrupt raised by a register write, for the bus to fold
+    /// into IF after any PPU register write.
+    pub fn take_stat_irq(&mut self) -> bool {
+        let p = self.stat_irq_pending;
+        self.stat_irq_pending = false;
+        p
+    }
+
+    /// Re-evaluate the STAT line after a register write; a low→high edge raises
+    /// a STAT interrupt right away (outside the per-dot tick path).
+    fn refresh_stat_after_write(&mut self) {
+        let cond = self.stat_condition();
+        if cond && !self.stat_line {
+            self.stat_irq_pending = true;
+        }
+        self.stat_line = cond;
     }
 
     fn lcd_enabled(&self) -> bool {
@@ -204,7 +230,13 @@ impl Ppu {
                     }
                 }
                 PpuMode::HBlank => {
-                    if self.dots >= LINE_DOTS {
+                    if self.lcd_on_line0 {
+                        if self.dots == OAM_DOTS + LCDON_DELAY {
+                            self.start_drawing();
+                            self.mode = PpuMode::Drawing;
+                            self.lcd_on_line0 = false;
+                        }
+                    } else if self.dots >= LINE_DOTS {
                         self.dots = 0;
                         self.ly += 1;
                         if self.ly == SCREEN_HEIGHT as u8 {
@@ -592,22 +624,43 @@ impl Ppu {
                     self.dots = 0;
                     self.mode = PpuMode::HBlank;
                     self.window_line = 0;
-                    self.stat_line = false;
-                    // The coincidence flag is retained while the LCD is off.
+                    // The coincidence latch is retained; with the scan stopped
+                    // only it can hold the STAT line up, so a genuine rising edge
+                    // is seen on re-enable (the mode sources are inactive).
+                    self.stat_line = self.lyc_match && self.stat & 0x40 != 0;
                 } else if !was_on && now_on {
                     self.ly = 0;
                     self.dots = 0;
-                    self.mode = PpuMode::OamScan;
+                    // Line 0 begins in mode 0 (no OAM scan); the LYC comparison
+                    // clock restarts, and the tick path raises any STAT edge.
+                    self.mode = PpuMode::HBlank;
+                    self.prev_mode = PpuMode::HBlank;
+                    self.transition_age = 0xFF;
+                    self.lcd_on_line0 = true;
                     self.window_line = 0;
-                    // The comparison clock restarts on power-on.
                     self.lyc_match = self.ly == self.lyc;
+                    // If restarting the comparison raises the STAT line, fire the
+                    // interrupt now (before the next instruction), matching the
+                    // enable-time timing the "intr" rounds expect.
+                    self.refresh_stat_after_write();
                 }
             }
-            0xFF41 => self.stat = value & 0x78,
+            0xFF41 => {
+                self.stat = value & 0x78;
+                if self.lcd_enabled() {
+                    self.refresh_stat_after_write();
+                }
+            }
             0xFF42 => self.scy = value,
             0xFF43 => self.scx = value,
             0xFF44 => {}
-            0xFF45 => self.lyc = value,
+            0xFF45 => {
+                self.lyc = value;
+                if self.lcd_enabled() {
+                    self.lyc_match = self.ly == self.lyc;
+                    self.refresh_stat_after_write();
+                }
+            }
             0xFF46 => self.dma = value,
             0xFF47 => self.bgp = value,
             0xFF48 => self.obp0 = value,
