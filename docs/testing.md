@@ -133,10 +133,21 @@ mooneye 这些 timing 测试用 **OAM DMA 当示波器**:把栈指进 OAM、或�
 → 指令跑飞。改成按源分总线阻塞(`dma_conflicts`,仅 OAM 恒锁)后,**整簇 9 个读时序全绿**,
 oam_dma 组不回归(见 `fix(bus): OAM DMA blocks only the bus that conflicts with its source`)。
 
-### 3.2 `rapid_toggle`(timer 亚周期)
-timer 内部本就逐 T-cycle。差的是 **CPU 的写在 M-cycle 内哪一拍提交**:紧凑循环里连写
-TAC,毛刺增量取决于写落地那刻计数器选中位是 0 还是 1;压在位翻转边界上,差 1–2 个
-T-cycle 结果就差一次。杠杆在"总线写的精确 T 位置",不在 timer 本身。
+### 3.2 `rapid_toggle`(timer 亚周期)—— 已量化到"差一圈",并证明非相位问题
+用 `inspect` 精确量化:真机期望 timer 中断在 **BC=FFD9**(从 FFFF 递减 38 圈)服务,
+我们在 **BC=FFD8**(39 圈)——**恰好晚一圈**。溯源:TIMA 从 F0 需 16 次毛刺增量溢出,
+毛刺在"关 TAC 且选中位(freq00→bit9=DIV bit1)为高"的那圈发生;我们的第 16 次增量比真机
+**晚一圈**落地(真机在 FFDA 圈就攒满,我们要到 FFD9 圈)。差别在计数器穿过 bit9 边界(512)
+的**亚拍相位**。
+
+两个实验把它钉死为"需要亚 M-cycle 分辨率",不是能靠调参修的:
+- **写落点 T3 vs T4**:把 `Cpu::write` 从"tick(4) 后写"(T4)改成 tick(3)-写-tick(1)(T3),
+  **回归了 `call/push/rst/call_cc2` 四个时序测试、且没修 rapid_toggle**——反证写就落在 **T4**。
+- **计数器相位扫描**:在 DIV 复位处注入相位偏移 0/±1/…/8 扫描。**没有任何偏移能同时**让
+  rapid_toggle=FFD9 且 `tim00/01/10/11` 仍绿:偏移 0–3 时 tim* 全绿但 rapid_toggle 恒 FFD8;
+  一旦偏到能翻 rapid_toggle(≥8 或负),tim* 全挂。**证明**我们的相位对 tim* 是正确的,
+  rapid_toggle 要的是 TAC 写那一刻计数器在 M-cycle **内部**的精确落点(亚 T-cycle 计数器模型),
+  与简单相位互斥——属架构级改动、碰其余 12 个 timer 测试,回归风险高。
 
 ### 3.3 PPU 组(mooneye `ppu` 4 挂 + mealybug mode-3)
 STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。本轮修好五个:
@@ -154,14 +165,20 @@ STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。�
   `DI` 之前,tick 路径会晚一两拍)。inspect 直接看到 `lyc_m/stat_l`,几步就锁定了 patch 未生效 +
   冻结丢失两个 bug。
 
-仍挂 2 个(已精确定位机制,缺参考拍/算法):
+仍挂 2 个(已查资料/参考实现精确定位机制):
 
+- **`intr_2_mode0_timing_sprites`**:**OBJ mode-3 惩罚已按硬件公式修好**(`11 - min(5,(x+SCX)%8)`,
+  X=0 恒 11;`ppu_probe` 逐点验证 mode3 = 172 + 精确惩罚,acid2 字节不变、零回归,见
+  `fix(ppu): hardware-accurate OBJ mode-3 penalty`)。但此测试**仍挂**——用 `inspect` 追出真因
+  是 **CPU/PPU 相位**:测量所在的那条 mode-2 中断行(LY=68)上**并没有精灵**(唯一在屏精灵在
+  line 66),即 CPU 醒在了"错的行"。惩罚精确与否不影响该测量,故已不是惩罚问题,而是醒来落点的
+  相位——同 §3.2/§3.6 一类的亚周期落点。
 - **`lcdon_*`**:trace 证实真机 line 0 的 STAT 先读 **mode 0** 再进 mode 3(`enable→mode 0` 已就位);
-  但**扫 delay=0..6 都不过**,说明不止 mode 3 起点——还牵涉 mode 3 长度 / OAM·VRAM 锁的逐点时序,
-  缺该测试的精确参考拍值。
-- **`intr_2_mode0_timing_sprites`**:非精灵版已过,只差**精灵的 OBJ mode-3 惩罚**精确(现为固定
-  6 dot 近似)。需要 Pan Docs 的 OBJ penalty 算法(按 (x+SCX)%8 + 取数状态算),且改动碰渲染、
-  有 acid2/mealybug 回归风险。
+  但**扫 delay=0..6 都不过**。**参考 gameroy 实现**:开屏后 line 0 走一段偏移过的 OAM search、
+  **mode 3 落在 cycle 84**(非普通行的 80),整条 line 0 计时用 `-7/-8` 偏移表达"晚 2 T";其
+  OAM/VRAM 逐拍锁窗与 mooneye 的期望值(`accessible@0,17,130,244 / locked@60,110,174,224`,跨
+  line0/line1)难以用我们**基于 dot 的行计时**干净复现,需把首行改成 gameroy 那套 clock 记账
+  ——是对 PPU 行计时的重写,碰 acid2/intr_2/stat,回归风险高。
 
 ### 3.4 实验教训(已回退)
 几次朝 T-cycle 精度的尝试被棘轮挡回,记录以免重蹈:
@@ -171,6 +188,9 @@ STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。�
   (HALT 变成变长,破坏了别处的周期计数)。说明中断路径要整体改,不能只改唤醒。
 - **lcdon 首行建模**(mode 3 落在 dot 82):dot 偏移猜错,且改动破坏了本地 `ppu_test` 对
   "开屏即 mode 2"的假设。首行特殊时序要连本地测试一起重做。
+- **写落点改 T3**(tick3-写-tick1):想同时啃 rapid_toggle / lcdon_write,结果**回归
+  `call/push/rst/call_cc2` 四个**、rapid_toggle 也没修。反证 SM83 的写就落在 **T4**,现有
+  "tick(4) 后写"是对的,别再动。
 
 ### 3.5 Boot 状态(不在目标范围)
 `boot_regs`/`boot_div`/`boot_hwio` 的 `dmg0/mgb/sgb/sgb2` 变体校验特定机型开机态;我们
@@ -179,12 +199,13 @@ STAT 中断的**边沿检测**本就正确(`ppu.rs` 的 `update_stat_line`)。�
 ### M-cycle 级 ↔ 亚周期级 光谱
 
 ```
-已过(含定向标定拿下的)              仍挂(标定密集、有回归风险)
+已过(含定向标定拿下的)              仍挂(亚周期落点,有回归风险)
 ──────────────────────────────────┼────────────────────────────────────────────
-Blargg cpu_instrs/instr/mem_timing  rapid_toggle(总线写的 T 位置)
-dmg-acid2                           intr_2_mode0_sprites(OBJ mode-3 惩罚)
-mooneye: bits/instr/interrupts      lcdon_*(开屏首行逐点时序)
+Blargg cpu_instrs/instr/mem_timing  rapid_toggle(亚 M-cycle 计数器,非相位)
+dmg-acid2                           intr_2_mode0_sprites(醒来行相位;惩罚已修)
+mooneye: bits/instr/interrupts      lcdon_*(开屏首行 clock 记账,参 gameroy)
 oam_dma 全组;控制流读/写时序          mealybug mode-3(取数/寄存器锁存点)
+OBJ mode-3 惩罚(11-min(5,(x+SCX)%8))
 timer(除 rapid_toggle);ei_sequence
 PPU mode-3 长度 / hblank_ly_scx
 PPU vblank_stat_intr / stat_lyc_onoff
