@@ -413,6 +413,10 @@ impl Ppu {
             self.fetch_state = FetchState::Tile;
             self.fetch_step = false;
             self.fetch_x = 0;
+            // WX < 7 places the window's left edge off-screen, so its first
+            // (7 - WX) pixels are clipped — the same fine-discard the SCX
+            // fine-scroll uses (mooneye-adjacent mealybug m3_wx_4/5/6_change).
+            self.discard = 7u8.saturating_sub(self.wx);
             return;
         }
 
