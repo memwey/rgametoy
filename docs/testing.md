@@ -10,26 +10,33 @@
 
 测试分两层——**灰盒**模块单测(快,钉内部时序)+ **黑盒** ROM 套件(ground truth)。
 
-### 1.1 模块单测(`cargo test`)—— 灰盒
+### 1.1 模块单测(`cargo test`)—— 大多黑盒,少数白盒就近放 src
 
-`tests/` 下按子系统组织,直接对 core(`console/`)各模块断言,不依赖外部 ROM。
-称"灰盒":**驱动侧是黑盒**(全走 `write_register`/`write_byte`=MMIO、`tick`、
-`read_register`/`framebuffer`,和真实程序驱动芯片一样),但**断言侧会观测内部量**
-(`get_mode()` 拿的是内部 mode、`ppu.ly`、`is_halted`/`ime_enabled`)——这对周期精确
-模拟器恰是优点:能钉住"内部 dot 80 进 Drawing、可见 mode 滞后 4 dot、counter 穿 512 边界"
-这类纯黑盒分辨不出的时序。
+两类:
 
-| 文件 | 覆盖 |
+- **黑盒**(主体):放 `tests/*.rs`(每文件独立 crate,只能用 `pub` API),全走
+  `write_register`/`write_byte`=MMIO、`tick`、`read_register`/`framebuffer`——和真实程序
+  驱动芯片一样。哪怕测的是内部时序,视角仍是黑盒(用真硬件接口)。
+- **白盒**(少数,需要软件读不到的**内部**量,如 PPU 的内部 mode):放**对应 src 模块的
+  `#[cfg(test)]`**,直接读私有字段(`self.mode`/`self.ly`/`self.dots`),**不必**为测试把内部
+  `pub` 出去。目前 `src/console/ppu.rs` 的 `#[cfg(test)]` 就放了 OAM-scan 80 dot、开屏首行、
+  STAT 滞后、mode-3 长度/精灵惩罚聚合这几个逐点时序测试。
+
+内部观测量若也想给 `inspect`/`ppu_probe` 用,就 gate 到 `--features debug` 后面
+(`Ppu::get_mode`、`debug_state`),默认构建不暴露(见 §1.2 末的调试器)。
+
+| 位置 | 覆盖 |
 |---|---|
-| `cpu_instructions_test.rs` / `registers_test.rs` | 指令语义、标志位、寄存器 |
-| `cpu_integration_test.rs` | 整程序跑通、`ADD HL` 进位、`ie_push` 向量重算 |
-| `ppu_test.rs` | 时序里程碑、开屏首行、mode-3 长度/精灵惩罚聚合、STAT 滞后、LY==LYC、OAM/VRAM 锁、精灵优先级/OBP、WX<7 裁剪、行内改色 |
-| `timer_test.rs` | 16 位计数器、四频率、下降沿毛刺(TAC/DIV)、重载延迟三态 |
-| `dma_test.rs` | OAM DMA 启动延迟、源总线阻塞(VRAM/外部)、echo 源、I/O 可读 |
-| `apu_test.rs` | 四声道、包络/扫频/长度、DAC |
-| `cartridge_test.rs` / `save_test.rs` / `savestate_test.rs` | MBC、电池存档、即时存档 |
-| `serial_test.rs` / `rom_render_test.rs` | 串口截获、整帧渲染 |
-| `common/mod.rs` | 共享脚手架(灰盒 PPU helper + 黑盒 ROM runner),被上面按需 `mod common;` 引入 |
+| `src/console/ppu.rs` `#[cfg(test)]` | 逐点时序:OAM-scan 80 dot、开屏首行 452 dot、STAT 滞后、mode-3 长度/精灵惩罚聚合 |
+| `tests/ppu_test.rs` | 行为级(黑盒):LY==LYC、OAM/VRAM 锁、精灵优先级/OBP、WX<7 裁剪、行内改色、整帧渲染 |
+| `tests/cpu_instructions_test.rs` / `registers_test.rs` | 指令语义、标志位、寄存器 |
+| `tests/cpu_integration_test.rs` | 整程序跑通、`ADD HL` 进位、`ie_push` 向量重算 |
+| `tests/timer_test.rs` | 16 位计数器、四频率、下降沿毛刺(TAC/DIV)、重载延迟三态 |
+| `tests/dma_test.rs` | OAM DMA 启动延迟、源总线阻塞(VRAM/外部)、echo 源、I/O 可读 |
+| `tests/apu_test.rs` | 四声道、包络/扫频/长度、DAC |
+| `tests/cartridge_test.rs` / `save_test.rs` / `savestate_test.rs` | MBC、电池存档、即时存档 |
+| `tests/serial_test.rs` / `rom_render_test.rs` | 串口截获、整帧渲染 |
+| `tests/common/mod.rs` | 共享脚手架(黑盒 PPU helper + ROM runner),被 `tests/*` 按需 `mod common;` 引入 |
 
 ```sh
 cargo test --release

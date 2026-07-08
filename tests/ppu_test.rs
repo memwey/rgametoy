@@ -1,127 +1,18 @@
 extern crate rgametoy;
 
 mod common;
-use common::{enabled_ppu, mode3_len_on_line2, mode3_len_with_sprites, render_frame};
-use rgametoy::console::ppu::{Ppu, PpuMode};
+use common::{enabled_ppu, render_frame};
+use rgametoy::console::ppu::Ppu;
 
-/// #2 regression: `tick` advances one PPU dot per T-cycle (no ×4). OAM scan
-/// (mode 2) lasts exactly 80 dots.
-#[test]
-fn ppu_oam_scan_lasts_80_dots() {
-    let mut ppu = enabled_ppu();
-    // Skip the special first line after enable: no OAM scan and only
-    // 452 dots (the PPU starts late). Line 1 is a normal line.
-    ppu.tick(200); ppu.tick(200); ppu.tick(52);
-    assert_eq!(ppu.ly, 1);
-    assert_eq!(ppu.get_mode(), PpuMode::OamScan);
+// Behaviour-level PPU tests, driven through the register / framebuffer
+// interface a game would use. The dot-precise timing tests that need the
+// *internal* mode (which software can't read directly) live in
+// `src/console/ppu.rs`'s `#[cfg(test)]` module, where they read private state.
 
-    ppu.tick(79);
-    assert_eq!(ppu.get_mode(), PpuMode::OamScan, "still OAM scan after 79 dots");
-
-    ppu.tick(1);
-    assert_eq!(ppu.get_mode(), PpuMode::Drawing, "80th dot enters pixel drawing");
-}
-
-/// The first scanline after the LCD is enabled is special (mooneye
-/// `lcdon_timing`): it starts in mode 0 and goes straight to mode 3 with no
-/// OAM scan, and it is 4 dots short, so LY reaches 1 at dot 452 not 456.
-#[test]
-fn ppu_first_line_after_enable_is_short_and_skips_oam_scan() {
-    let mut ppu = enabled_ppu();
-    assert_eq!(ppu.ly, 0);
-    assert_eq!(
-        ppu.get_mode(),
-        PpuMode::HBlank,
-        "line 0 begins in mode 0, not OAM scan"
-    );
-
-    ppu.tick(80);
-    assert_eq!(
-        ppu.get_mode(),
-        PpuMode::Drawing,
-        "line 0 enters drawing at dot 80 without an OAM-scan phase"
-    );
-
-    ppu.tick(200);
-    ppu.tick(171); // dot 451
-    assert_eq!(ppu.ly, 0, "still on the short line 0 at dot 451");
-    ppu.tick(1); // dot 452
-    assert_eq!(ppu.ly, 1, "line 0 ends 4 dots early, at dot 452");
-    assert_eq!(
-        ppu.get_mode(),
-        PpuMode::OamScan,
-        "line 1 is a normal line and starts an OAM scan"
-    );
-}
-
-/// Mode 3 stretches by the OBJ penalty, and stacked sprites at the same X pay
-/// the background-fetch abort only once: the first sprite at X=0 costs 11 dots
-/// and each further one at the same X costs just the 6-dot fetch (mooneye
-/// `intr_2_mode0_timing_sprites`).
-#[test]
-fn ppu_stacked_sprite_penalty_aggregates() {
-    assert_eq!(mode3_len_with_sprites(&[]), 172, "baseline mode 3 is 172 dots");
-    assert_eq!(mode3_len_with_sprites(&[0]), 183, "one X=0 sprite adds the full 11");
-    assert_eq!(
-        mode3_len_with_sprites(&[0, 0]),
-        189,
-        "a second stacked sprite adds only 6"
-    );
-    assert_eq!(
-        mode3_len_with_sprites(&[0, 0, 0]),
-        195,
-        "a third stacked sprite adds only 6"
-    );
-}
-
-/// Mode 3 stretches by the SCX fine-scroll discard: its length is
-/// 172 + (SCX & 7) dots (mooneye `intr_2_mode3_timing` / `hblank_ly_scx`).
-#[test]
-fn ppu_mode3_grows_with_scx_fine_scroll() {
-    for scx in [0u8, 1, 3, 5, 7] {
-        let mut ppu = Ppu::new();
-        ppu.write_register(0xFF43, scx);
-        ppu.write_register(0xFF40, 0x91);
-        assert_eq!(
-            mode3_len_on_line2(&mut ppu),
-            172 + (scx & 7) as u32,
-            "SCX={} fine scroll stretches mode 3",
-            scx
-        );
-    }
-}
-
-/// At most 10 sprites are selected per line, so an 11th stacked sprite adds no
-/// further mode-3 penalty (mooneye `intr_2_..._sprites`, 10-sprite cap).
-#[test]
-fn ppu_selects_at_most_10_sprites_per_line() {
-    let ten = mode3_len_with_sprites(&[0; 10]);
-    let eleven = mode3_len_with_sprites(&[0; 11]);
-    assert_eq!(ten, 172 + 11 + 6 * 9, "10 stacked sprites: 11 + 6*9");
-    assert_eq!(eleven, ten, "the 11th sprite is dropped (10-per-line cap)");
-}
-
-/// The STAT mode bits (and the OAM/VRAM lock release) lag the internal mode
-/// transition by 4 dots out of a scan/blank mode (mooneye `intr_2_mode0/3`).
-#[test]
-fn ppu_stat_mode_bits_lag_the_internal_transition() {
-    let mut ppu = enabled_ppu();
-    while ppu.ly != 2 {
-        ppu.tick(1);
-    }
-    ppu.tick(80); // internal OAM-scan -> drawing happens on this dot
-    assert_eq!(ppu.get_mode(), PpuMode::Drawing, "internal mode is drawing");
-    assert_eq!(
-        ppu.read_register(0xFF41) & 3,
-        2,
-        "STAT still reads mode 2 for a few dots after the transition"
-    );
-    ppu.tick(4);
-    assert_eq!(
-        ppu.read_register(0xFF41) & 3,
-        3,
-        "STAT catches up to mode 3 after the 4-dot lag"
-    );
+/// LY as software reads it (the FF44 register), so these tests need no
+/// internal accessor.
+fn ly(ppu: &Ppu) -> u8 {
+    ppu.read_register(0xFF44)
 }
 
 /// The LY==LYC coincidence sets STAT bit 2 and, with the source enabled, raises
@@ -131,7 +22,7 @@ fn ppu_lyc_coincidence_sets_stat_bit_and_interrupts() {
     let mut ppu = enabled_ppu();
     ppu.write_register(0xFF45, 5); // LYC = 5
     ppu.write_register(0xFF41, 0x40); // enable the LYC=LY STAT source
-    while ppu.ly != 5 {
+    while ly(&ppu) != 5 {
         ppu.tick(1);
     }
     let mut saw_int = false;
@@ -157,7 +48,7 @@ fn ppu_locks_oam_in_scan_and_draw_and_vram_in_draw() {
     ppu.write_oam(0xFE00, 0x42);
     ppu.write_register(0xFF40, 0x80); // LCD on
 
-    while ppu.ly != 2 {
+    while ly(&ppu) != 2 {
         ppu.tick(1);
     }
     ppu.tick(40); // mode 2 (OAM scan)
@@ -268,12 +159,7 @@ fn ppu_window_with_wx_below_7_clips_its_left_edge() {
                                    // LCD on, window on, BG on, tile data 0x8000, both maps 0x9800.
     ppu.write_register(0xFF40, 0xB1);
 
-    for _ in 0..2000 {
-        ppu.tick(200);
-        if ppu.take_frame_ready() {
-            break;
-        }
-    }
+    render_frame(&mut ppu);
 
     // Without clipping, x0 would show the window's pixel 0 (colour 3 -> shade 3).
     // With the (7 - 5) = 2 pixel clip, x0 shows window pixel 2 (colour 1 -> shade 1).
@@ -289,11 +175,11 @@ fn ppu_window_with_wx_below_7_clips_its_left_edge() {
 fn ppu_does_not_tick_when_lcd_off() {
     let mut ppu = Ppu::new(); // LCDC = 0 -> LCD off
     assert_eq!(ppu.tick(200), 0);
-    assert_eq!(ppu.ly, 0);
+    assert_eq!(ly(&ppu), 0);
 }
 
-/// #1 regression: the frame-ready flag is set once, at the transition into
-/// VBlank (ly == 144), and is cleared when consumed.
+/// The frame-ready flag is set once, at the transition into VBlank (ly == 144),
+/// and is cleared when consumed.
 #[test]
 fn ppu_frame_ready_fires_once_at_vblank() {
     let mut ppu = enabled_ppu();
@@ -305,7 +191,7 @@ fn ppu_frame_ready_fires_once_at_vblank() {
         ppu.tick(200);
         if ppu.take_frame_ready() {
             fired += 1;
-            ly_at_fire = ppu.ly;
+            ly_at_fire = ly(&ppu);
             break;
         }
     }
@@ -348,13 +234,7 @@ fn ppu_renders_background_tile() {
     ppu.write_register(0xFF47, 0xE4);
     ppu.write_register(0xFF40, 0x91);
 
-    // Run one full frame so scanline 0 is rendered.
-    for _ in 0..2000 {
-        ppu.tick(200);
-        if ppu.take_frame_ready() {
-            break;
-        }
-    }
+    render_frame(&mut ppu);
 
     let fb = ppu.framebuffer();
     // Top-left 8×8 block should be shade 3.
@@ -414,12 +294,7 @@ fn ppu_renders_sprite() {
     ppu.write_register(0xFF48, 0xE4); // OBP0 identity
     ppu.write_register(0xFF40, 0x93); // LCD on, OBJ on, BG on
 
-    for _ in 0..2000 {
-        ppu.tick(200);
-        if ppu.take_frame_ready() {
-            break;
-        }
-    }
+    render_frame(&mut ppu);
 
     let fb = ppu.framebuffer();
     assert_eq!(fb[0], 3, "sprite pixel drawn at (0,0)");
