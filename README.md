@@ -32,8 +32,7 @@ cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍
 支持的卡带:无 MBC (32KB)、MBC1、MBC3(不含 RTC)、MBC5,含外部 RAM 与 bank 切换。
 带电池的卡带把外部 RAM 存档持久化到 `saves/<卡带文件名>-<内容哈希>.sav`——文件名可读、
 哈希绑 ROM 内容(同名不同 ROM 不撞),`.sav` 本身是裸 SRAM(与其它模拟器通用)。启动时自动
-读回(找不到则回退读旧的同目录 `<rom>.sav`,下次落盘即迁移到新位置),运行中防抖落盘,
-退出时兜底保存。
+读回,运行中防抖落盘,退出时兜底保存。
 
 已实现:完整 SM83 指令集(含 CB 前缀)、中断(VBlank/STAT/Timer/Serial/Joypad)、Timer、
 PPU 像素-FIFO 渲染(背景 / 窗口 / 精灵,mode 3 逐点)、OAM DMA、串口(截获输出)、键盘输入、

@@ -95,8 +95,7 @@ impl Emulator {
     }
 
     /// Load a `.gb` ROM from disk and boot into the DMG post-boot state. For a
-    /// battery-backed cartridge, restore its save from `<data-dir>/saves`
-    /// (falling back to a legacy sibling `<rom>.sav` if present).
+    /// battery-backed cartridge, restore its save from `<data-dir>/saves`.
     pub fn load_rom<P: AsRef<Path>>(&mut self, path: P) -> std::io::Result<()> {
         let data = std::fs::read(&path)?;
         // Derive the save name from the ROM bytes before they move into the
@@ -110,22 +109,13 @@ impl Emulator {
         if self.console.get_bus_mut().cartridge().has_battery() {
             // Saves live in <data-dir>/saves keyed by ROM name + content hash.
             let save_path = self.data_dir.join("saves").join(save_name);
-            // Read the current-scheme save, else fall back to a legacy sibling
-            // `<rom>.sav` so pre-existing saves migrate on the next flush.
-            let legacy = path.as_ref().with_extension("sav");
-            let loaded = match std::fs::read(&save_path) {
-                Ok(saved) => Some((saved, save_path.clone())),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::read(&legacy)
-                    .ok()
-                    .map(|saved| (saved, legacy.clone())),
-                Err(e) => {
-                    eprintln!("could not read save {}: {e}", save_path.display());
-                    None
+            match std::fs::read(&save_path) {
+                Ok(saved) => {
+                    self.console.get_bus_mut().cartridge_mut().load_ram(&saved);
+                    println!("Loaded save: {}", save_path.display());
                 }
-            };
-            if let Some((saved, from)) = loaded {
-                self.console.get_bus_mut().cartridge_mut().load_ram(&saved);
-                println!("Loaded save: {}", from.display());
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => eprintln!("could not read save {}: {e}", save_path.display()),
             }
             self.save_path = Some(save_path);
         }
