@@ -14,6 +14,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 rgametoy-core = { workspace = true, features = ["serialize"] }
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 
 # Pull in every browser API the host glue needs. Adding them all up front
@@ -24,8 +25,9 @@ web-sys = { version = "0.3", features = [
     "HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData",
     "HtmlInputElement", "HtmlButtonElement", "HtmlAnchorElement",
     "File", "FileList", "FileReader", "Blob", "BlobPropertyBag", "Url", "Event", "KeyboardEvent",
-    "AudioContext", "AudioBuffer", "AudioProcessingEvent", "ScriptProcessorNode",
-    "AudioDestinationNode", "EventTarget", "console",
+    "AudioContext", "AudioDestinationNode", "AudioNode",
+    "AudioWorklet", "Worklet", "AudioWorkletNode", "AudioWorkletNodeOptions", "MessagePort",
+    "EventTarget", "console",
     "IdbFactory", "IdbOpenDbRequest", "IdbOpenDbOptions",
     "IdbDatabase", "IdbRequest", "IdbObjectStore", "IdbObjectStoreParameters",
     "IdbTransaction", "IdbTransactionMode",

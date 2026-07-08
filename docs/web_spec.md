@@ -171,7 +171,7 @@ rAF callback (主线程, ~60 Hz)
   ├── fb = host.framebuffer()                  // Uint8Array(23040 bytes)
   ├── image_data = new ImageData(new Uint8ClampedArray(fb), 160, 144)
   ├── canvas_ctx2d.putImageData(image_data, 0, 0)
-  └── (音频由 ScriptProcessorNode.onaudioprocess 拉,主循环不直接管)
+  └── 若音频开:AudioPlayer::feed(本帧 APU 样本) → 重采样 → postMessage 给 worklet(见 §6.2)
 ```
 
 **计时基准(重要)**:我们适配的是**模拟出的 Game Boy 输出**,它才是计时的钟——DMG 逐点/逐行凑成一帧(154 行 × 456 点 = 70224 周期),落在 ~59.7 fps。因此:
@@ -182,17 +182,24 @@ rAF callback (主线程, ~60 Hz)
 
 这条原则对 desktop 同样成立(desktop 用 `frame_budget` sleep 按墙钟计,`present` 不锁 vsync、上限 ~250 fps),两端一致。
 
-### 6.2 音频
+### 6.2 音频(AudioWorklet 输出汇)
 
 ```text
-ScriptProcessorNode.onaudioprocess (audio 线程)
-  └── inner.borrow_mut().console.take_audio_samples()
-       └── out_buf.copy_from(samples)
+主线程 rAF 每帧:
+  console.take_audio_samples()            // 本帧的 APU 样本(source_rate 交织立体声)
+  └── AudioPlayer::feed(samples)
+       ├── resampler: source_rate → device_rate
+       └── port.postMessage(Float32Array) ──► 音频渲染线程
+
+音频渲染线程(AudioWorkletProcessor.process,每次 128 帧):
+  从环形缓冲(约 170ms)pop 出 128 帧;欠载补静音,溢出丢最旧(延迟有界)
 ```
 
-`take_audio_samples` 内部清空 console 内部 sample buffer,所以不会积压。
+`take_audio_samples` 每帧清空 console 内部 sample buffer,所以不会积压。
 
-**驱动权**:音频开时,`onaudioprocess` 回调**驱动**模拟(step 到填满这批缓冲),rAF 只负责画;音频关时,rAF 循环按真实时间驱动(见 §6.1)。**快进**(按住 `Space`)时改由 rAF 以固定倍速(4×,对齐 desktop、按墙钟计而非按刷新率)驱动,音频回调则输出静音且不 step——即"加速即静音",也避免两边同时 step 造成双重驱动。
+**驱动权(统一)**:**rAF 循环始终驱动模拟**,按墙钟计(见 §6.1);音频只是**下游汇**,不驱动模拟。音频开时,每帧把 APU 输出喂给 worklet;音频关时不喂。**快进**(按住 `Space`)时 rAF 以固定倍速(4×,对齐 desktop)驱动、且**不喂音频**——即"加速即静音"。
+
+这是从旧版(主线程 `ScriptProcessorNode` 的 `onaudioprocess` 驱动模拟)迁过来的:输出移到音频渲染线程(`AudioWorklet`),更抗主线程卡顿;驱动权统一到 rAF,消除了"音频开时驱动方式不一致"和音频回调重入借用 `Inner` 的隐患。worklet 用 blob URL 内联加载(无需单独静态资源)。**权衡**:改成 sync-to-video 后,系统钟与声卡钟会缓慢漂移,由 worklet 的环形缓冲吸收(溢出丢最旧、欠载补静音)。
 
 ### 6.3 ROM 加载时序
 
@@ -358,16 +365,18 @@ Trunk 在 build 时把 `data-trunk` 标签替换成产物引用。
 
 ```toml
 [dependencies]
-rgametoy-core    = { workspace = true }
-wasm-bindgen     = "0.2"
-js-sys           = "0.3"
+rgametoy-core        = { workspace = true, features = ["serialize"] }
+wasm-bindgen         = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys               = "0.3"
 web-sys = { version = "0.3", features = [
     "Window", "Document", "Element", "HtmlElement",
     "HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData",
     "HtmlInputElement", "HtmlButtonElement", "HtmlAnchorElement",
-    "File", "FileReader", "Blob", "Url", "Event", "KeyboardEvent",
-    "AudioContext", "AudioBuffer", "ScriptProcessorNode",
-    "AudioDestinationNode", "EventTarget",
+    "File", "FileReader", "Blob", "BlobPropertyBag", "Url", "Event", "KeyboardEvent",
+    "AudioContext", "AudioDestinationNode", "AudioNode",
+    "AudioWorklet", "Worklet", "AudioWorkletNode", "AudioWorkletNodeOptions", "MessagePort",
+    "EventTarget", "console",
     "IdbFactory", "IdbOpenDbRequest", "IdbDatabase",
     "IdbRequest", "IdbObjectStore", "IdbTransaction",
     "DomException",
@@ -375,7 +384,7 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 ```
 
-不引入 `wasm-bindgen-futures`(异步用手写 `Closure` + `Promise::then`)。
+`wasm-bindgen-futures` 用来 `await` `AudioWorklet.addModule` 返回的 promise(启用音频时)。
 
 ## 15. 本地开发
 

@@ -1,7 +1,9 @@
 //! Wasm-side host glue. The `WasmHost` newtype wraps a `Rc<RefCell<Inner>>`
 //! and is the only type the JS side talks to. Inner is shared with the rAF
-//! loop closure (and, in Phase 5, the audio callback closure) via an `Rc`
-//! clone captured by the closure.
+//! loop closure (and the input/button listeners) via an `Rc` clone captured by
+//! each closure. The rAF loop is the sole driver of emulation; audio is a
+//! downstream sink (`audio::AudioPlayer`) fed each frame — it does not run the
+//! console, so no closure needs to re-borrow `Inner` from the audio thread.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -111,11 +113,12 @@ pub struct Inner {
     /// battery-RAM autosave can rewrite the record without clobbering the
     /// user's saved state.
     pub quick_state: Option<Vec<u8>>,
-    /// Set once the user has enabled audio. When true, the audio callback
-    /// drives the emulator forward in time (so audio and visual stay
-    /// in lock-step); the rAF loop only repaints.
+    /// Set once the user has enabled audio. When true, the rAF loop feeds each
+    /// frame's APU output to the worklet sink; the rAF loop always drives
+    /// emulation either way (audio no longer drives it).
     pub audio_enabled: bool,
-    /// Holds the AudioContext / ScriptProcessorNode for the page lifetime.
+    /// The audio graph (AudioContext + AudioWorklet sink), built lazily on first
+    /// enable and kept for the page's lifetime. `None` until then.
     pub audio: Option<AudioPlayer>,
     /// IndexedDB connection. `None` until `onsuccess` fires (or
     /// permanently if the open errored). Shared with the IDB callbacks
@@ -451,42 +454,37 @@ impl Inner {
 
         self.apply_input();
         if !self.paused && self.has_rom {
+            // Single drive model: the rAF loop always advances the console,
+            // paced against the wall clock (frames per *real* time, not per
+            // refresh — so a 120/144 Hz panel doesn't run fast). Audio, when on,
+            // is a pure downstream sink fed each frame (see below); it no longer
+            // drives emulation. Fast-forward is the same loop at TURBO_SPEED.
             let now = js_sys::Date::now();
             let dt = if self.last_tick_ms == 0.0 {
                 DMG_FRAME_MS
             } else {
                 (now - self.last_tick_ms).min(MAX_CATCHUP_MS)
             };
-            if self.keys_down.contains(TURBO_KEY) {
-                // Fast-forward: the rAF loop drives at a fixed multiple of real
-                // time, on *any* refresh rate — even when audio is on (the audio
-                // callback goes silent and stops stepping while turbo is held,
-                // so it doesn't double-drive). Then drain the APU buffer the
-                // sped-up frames produced, so audio resumes cleanly on release.
-                let (n, accum) =
-                    frames_to_run(self.frame_accum_ms, dt * TURBO_SPEED, TURBO_MAX_FRAMES_PER_TICK);
-                self.frame_accum_ms = accum;
-                for _ in 0..n {
-                    self.console.run_frame();
-                }
-                let _ = self.console.take_audio_samples();
-                self.last_tick_ms = now;
-            } else if !self.audio_enabled {
-                // Normal speed, no audio: pace against real elapsed time, not
-                // the display refresh (a fixed one-frame-per-rAF runs 2× on a
-                // 120 Hz panel).
-                let (n, accum) = frames_to_run(self.frame_accum_ms, dt, MAX_FRAMES_PER_TICK);
-                self.frame_accum_ms = accum;
-                for _ in 0..n {
-                    self.console.run_frame();
-                }
-                self.last_tick_ms = now;
+            let turbo = self.keys_down.contains(TURBO_KEY);
+            let (n, accum) = if turbo {
+                frames_to_run(self.frame_accum_ms, dt * TURBO_SPEED, TURBO_MAX_FRAMES_PER_TICK)
             } else {
-                // Audio on, no turbo: the audio callback drives emulation; the
-                // rAF loop only paints. Keep the pacing clock fresh so a switch
-                // back to rAF driving (turbo, or disabling audio) starts clean.
-                self.last_tick_ms = 0.0;
-                self.frame_accum_ms = 0.0;
+                frames_to_run(self.frame_accum_ms, dt, MAX_FRAMES_PER_TICK)
+            };
+            self.frame_accum_ms = accum;
+            for _ in 0..n {
+                self.console.run_frame();
+            }
+            self.last_tick_ms = now;
+
+            // Drain the APU every frame (keeps its buffer from filling its cap).
+            // Feed the worklet only at 1× with audio on; while fast-forwarding we
+            // drop it — fast-forward is muted, matching desktop.
+            let samples = self.console.take_audio_samples();
+            if self.audio_enabled && !turbo {
+                if let Some(player) = self.audio.as_mut() {
+                    player.feed(&samples);
+                }
             }
         }
         let fb = self.console.framebuffer();
@@ -643,55 +641,6 @@ impl WasmHost {
 
     pub fn is_paused(&self) -> bool {
         self.inner.borrow().paused
-    }
-
-    /// Enable WebAudio output. Idempotent: a second call is a no-op.
-    /// Must be called from a user-gesture handler (click/keypress), or
-    /// the browser will keep the AudioContext suspended.
-    pub fn enable_audio(&self) -> Result<(), JsValue> {
-        let mut inner = self.inner.borrow_mut();
-        if inner.audio_enabled {
-            return Ok(());
-        }
-        // Reuse the one context across enable/disable cycles: build it only the
-        // first time (reading the APU rate under the borrow — `enable` must not
-        // re-borrow this cell), then just resume.
-        if inner.audio.is_none() {
-            let source_rate = inner.console.audio_output_rate();
-            let player = crate::audio::enable(self.inner.clone(), source_rate)?;
-            inner.audio = Some(player);
-        }
-        if let Some(player) = inner.audio.as_ref() {
-            if let Err(e) = player.resume() {
-                weblog::error_val("audio: failed to resume the AudioContext", &e);
-            }
-        }
-        inner.audio_enabled = true;
-        inner.set_status("audio: on");
-        Ok(())
-    }
-
-    pub fn is_audio_enabled(&self) -> bool {
-        self.inner.borrow().audio_enabled
-    }
-
-    /// Suspend audio output (e.g. on tab blur). The emulator keeps
-    /// running visually; audio resumes when [`Self::resume_audio`] is
-    /// called.
-    pub fn suspend_audio(&self) -> Result<(), JsValue> {
-        let inner = self.inner.borrow();
-        if let Some(player) = &inner.audio {
-            player.suspend()?;
-        }
-        Ok(())
-    }
-
-    pub fn resume_audio(&self) -> Result<(), JsValue> {
-        let inner = self.inner.borrow();
-        if let Some(player) = &inner.audio {
-            player.resume()?;
-        }
-        Ok(())
     }
 
     pub fn save_state_bytes(&self) -> js_sys::Uint8Array {
@@ -887,55 +836,93 @@ impl WasmHost {
             host_shot.borrow_mut().screenshot_pending = true;
         })?;
 
-        // Audio toggle — the only button that needs its own element so it can
-        // relabel itself. It reuses a single AudioContext across toggles:
-        // built lazily on first enable (Web Audio requires a user gesture to
-        // start), then suspended/resumed. While suspended the callback stops
-        // firing, so the rAF loop takes back over driving emulation.
+        // Audio toggle. Reuses a single AudioContext across toggles (built once,
+        // asynchronously, on first enable — Web Audio requires a user gesture),
+        // then suspend/resume. See `start_audio` / `stop_audio`.
         let host_audio: Rc<RefCell<Inner>> = self.inner.clone();
         let audio_btn: web_sys::HtmlElement = get_html_element(&doc, "audio-button")?;
         let audio_btn_for_cb: web_sys::HtmlElement = audio_btn.clone();
         on_click(&audio_btn, move || {
-            let mut h = host_audio.borrow_mut();
-            if h.audio_enabled {
-                // Disable: suspend the context; the rAF loop drives again.
-                if let Some(player) = h.audio.as_ref() {
-                    if let Err(e) = player.suspend() {
-                        weblog::error_val("audio: failed to suspend the AudioContext", &e);
-                    }
-                }
-                h.audio_enabled = false;
-                // Hand pacing back to the rAF loop with a fresh clock so it
-                // doesn't try to catch up for the silent interval.
-                h.last_tick_ms = 0.0;
-                h.frame_accum_ms = 0.0;
-                h.set_status("audio: off");
-                audio_btn_for_cb.set_text_content(Some("Enable audio"));
-                return;
+            let enabled = host_audio.borrow().audio_enabled;
+            let btn = Some(audio_btn_for_cb.clone());
+            if enabled {
+                stop_audio(&host_audio, btn);
+            } else {
+                start_audio(&host_audio, btn);
             }
-            // Enable: build the graph on first use (reads the APU rate under the
-            // borrow — `enable` must not re-borrow this cell or it panics).
-            if h.audio.is_none() {
-                let source_rate = h.console.audio_output_rate();
-                match crate::audio::enable(host_audio.clone(), source_rate) {
-                    Ok(player) => h.audio = Some(player),
-                    Err(e) => {
-                        weblog::error_val("audio init failed", &e);
-                        let msg = e.as_string().unwrap_or_else(|| "audio init failed".to_string());
-                        h.set_status(&format!("audio: {msg}"));
-                        return;
-                    }
-                }
-            }
-            if let Some(player) = h.audio.as_ref() {
-                if let Err(e) = player.resume() {
-                    weblog::error_val("audio: failed to resume the AudioContext", &e);
-                }
-            }
-            h.audio_enabled = true;
-            h.set_status("audio: on");
-            audio_btn_for_cb.set_text_content(Some("Disable audio"));
         })?;
         Ok(())
+    }
+}
+
+/// Start (or resume) audio. Sets the enabled flag + relabels the button
+/// optimistically, then either resumes the existing context or builds one
+/// asynchronously (`AudioWorklet.addModule` is a promise). Building is
+/// fire-and-forget: until it resolves, the rAF loop's audio feed simply finds
+/// no player yet and skips — emulation is unaffected.
+fn start_audio(host: &Rc<RefCell<Inner>>, label: Option<web_sys::HtmlElement>) {
+    {
+        let mut h = host.borrow_mut();
+        if h.audio_enabled {
+            return;
+        }
+        h.audio_enabled = true;
+        h.set_status("audio: on");
+        if let Some(btn) = &label {
+            btn.set_text_content(Some("Disable audio"));
+        }
+        if let Some(player) = h.audio.as_ref() {
+            if let Err(e) = player.resume() {
+                weblog::error_val("audio: failed to resume the AudioContext", &e);
+            }
+            return;
+        }
+    }
+    // No graph yet — build it off the borrow (async).
+    let source_rate = host.borrow().console.audio_output_rate();
+    let host = host.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        match crate::audio::enable(source_rate).await {
+            Ok(player) => {
+                let mut h = host.borrow_mut();
+                // The user may have toggled audio off while the graph was
+                // loading; honour the current flag, but keep the player for reuse.
+                if h.audio_enabled {
+                    if let Err(e) = player.resume() {
+                        weblog::error_val("audio: failed to resume the AudioContext", &e);
+                    }
+                } else {
+                    let _ = player.suspend();
+                }
+                h.audio = Some(player);
+            }
+            Err(e) => {
+                weblog::error_val("audio init failed", &e);
+                let mut h = host.borrow_mut();
+                h.audio_enabled = false;
+                h.set_status("audio: init failed");
+                if let Some(btn) = &label {
+                    btn.set_text_content(Some("Enable audio"));
+                }
+            }
+        }
+    });
+}
+
+/// Suspend audio (disable). The rAF loop keeps driving emulation regardless.
+fn stop_audio(host: &Rc<RefCell<Inner>>, label: Option<web_sys::HtmlElement>) {
+    let mut h = host.borrow_mut();
+    if !h.audio_enabled {
+        return;
+    }
+    if let Some(player) = h.audio.as_ref() {
+        if let Err(e) = player.suspend() {
+            weblog::error_val("audio: failed to suspend the AudioContext", &e);
+        }
+    }
+    h.audio_enabled = false;
+    h.set_status("audio: off");
+    if let Some(btn) = &label {
+        btn.set_text_content(Some("Enable audio"));
     }
 }

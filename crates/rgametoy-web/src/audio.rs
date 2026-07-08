@@ -1,173 +1,149 @@
-//! WebAudio output: a `ScriptProcessorNode` that drains interleaved stereo
-//! from the core's APU and feeds the default audio device. The audio
-//! callback drives the emulator forward in time so audio and visual stay
-//! in lock-step; the rAF loop only paints the current framebuffer.
+//! WebAudio output via an **AudioWorklet**. The emulator runs on the main
+//! thread (the rAF loop); each frame it hands its APU output to this sink, which
+//! resamples to the device rate and `postMessage`s it to a tiny ring-buffer
+//! processor running on the browser's audio render thread. The worklet plays it
+//! out on its own thread, so audio survives main-thread jank far better than the
+//! old (deprecated, main-thread) `ScriptProcessorNode`.
+//!
+//! Unlike that version, this module is a *pure output sink*: it does not drive
+//! the emulator and never touches `Inner`, so there is no reentrancy hazard. The
+//! drive model is unified — the rAF loop paces emulation against the wall clock
+//! whether or not audio is on (see `wasm_host::Inner::step_and_present`).
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::JsValue;
+use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    AudioBuffer, AudioContext, AudioProcessingEvent, Event, EventTarget,
-    ScriptProcessorNode,
+    AudioContext, AudioWorkletNode, AudioWorkletNodeOptions, Blob, BlobPropertyBag, MessagePort,
+    Url,
 };
 
 use crate::resample::Resampler;
 
-/// Bundles the AudioContext plus the ScriptProcessorNode's lifetime. Both
-/// are kept alive for the page's lifetime; the `onaudioprocess` closure is
-/// `forget()`-leaked in [`enable`] (audio is brought up at most once).
+/// The audio-thread processor: a bounded ring buffer of interleaved stereo,
+/// fed device-rate chunks over the port and drained 128 frames per `process()`.
+/// On overflow it drops the oldest samples (latency stays bounded); on underrun
+/// it outputs silence. Inlined and loaded via a blob URL so no separate asset
+/// has to be served.
+const WORKLET_JS: &str = r#"
+class RgametoyAudio extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.cap = 16384;            // interleaved floats (~170 ms stereo @ 48 kHz)
+    this.buf = new Float32Array(this.cap);
+    this.read = 0;
+    this.count = 0;              // interleaved floats currently buffered
+    this.port.onmessage = (e) => {
+      const chunk = e.data;
+      let n = chunk.length;
+      let start = 0;
+      if (n > this.cap) { start = n - this.cap; n = this.cap; } // keep the tail
+      const overflow = this.count + n - this.cap;
+      if (overflow > 0) { this.read = (this.read + overflow) % this.cap; this.count -= overflow; }
+      for (let i = start; i < chunk.length; i++) {
+        this.buf[(this.read + this.count) % this.cap] = chunk[i];
+        this.count++;
+      }
+    };
+  }
+  process(inputs, outputs) {
+    const out = outputs[0];
+    const left = out[0], right = out[1];
+    const frames = left.length;
+    for (let i = 0; i < frames; i++) {
+      if (this.count >= 2) {
+        left[i] = this.buf[this.read]; this.read = (this.read + 1) % this.cap;
+        right[i] = this.buf[this.read]; this.read = (this.read + 1) % this.cap;
+        this.count -= 2;
+      } else {
+        left[i] = 0; right[i] = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('rgametoy-audio', RgametoyAudio);
+"#;
+
+/// The live audio graph: an `AudioContext`, the worklet node (kept alive), its
+/// message port, and the resampler that maps the APU's fixed rate to the
+/// device rate. Held in `Inner::audio` for the page's lifetime.
 pub struct AudioPlayer {
-    pub ctx: AudioContext,
+    ctx: AudioContext,
+    port: MessagePort,
+    resampler: Resampler,
+    resampled: Vec<f32>,
+    source_rate: u32,
+    device_rate: u32,
+    // Kept alive so the audio node isn't GC'd; not otherwise read.
     #[allow(dead_code)]
-    pub node: ScriptProcessorNode,
-    #[allow(dead_code)]
-    pub device_rate: u32,
+    node: AudioWorkletNode,
 }
 
-/// Maximum number of interleaved source samples the resampler is allowed to
-/// hold. One Game Boy frame at 48 kHz is ~800 samples; the cap is set
-/// generously so a stutter never has to drop the APU's output wholesale.
-const RESAMPLE_BUF_CAP: usize = 16384;
-
-/// Bring up audio: a new `AudioContext`, a ScriptProcessor, and the
-/// `onaudioprocess` closure that drains the APU and writes the output
-/// buffer. The caller passes in the shared `Rc<RefCell<Inner>>` so the
-/// callback can run frames on the same `Console` the rAF loop is reading.
-///
-/// `source_rate` (the APU's fixed output rate) is passed in rather than read
-/// from `inner` here: the callers hold a `borrow_mut()` on the same `RefCell`
-/// while calling this, so a `borrow()` inside would panic ("already mutably
-/// borrowed"). `inner` is only ever touched *asynchronously* — when the audio
-/// callback fires — never synchronously in this function.
-///
-/// Returns the live `AudioPlayer` (kept in `Inner::audio` so the GC doesn't
-/// reap the AudioContext); the `onaudioprocess` closure is leaked internally.
-/// The context is *not* resumed — modern browsers gate `AudioContext` on a
-/// user gesture, so the UI exposes an "Enable audio" button that calls
-/// `AudioPlayer::resume` after the click.
-pub fn enable(
-    inner: Rc<RefCell<crate::wasm_host::Inner>>,
-    source_rate: u32,
-) -> Result<AudioPlayer, JsValue> {
+/// Bring up the audio graph. Async because `AudioWorklet.addModule` returns a
+/// promise. Does not drive the emulator and never touches `Inner` — no
+/// reentrancy hazard. The context starts suspended (browsers gate audio on a
+/// user gesture); the caller [`resume`](AudioPlayer::resume)s it from the click.
+pub async fn enable(source_rate: u32) -> Result<AudioPlayer, JsValue> {
     let ctx = AudioContext::new()?;
-    let device_rate = ctx.sample_rate() as u32;
-    // Buffer size: 2048 frames at the device rate is ~43 ms at 48 kHz —
-    // a balance between latency and the overhead per callback. The
-    // browser clamps to a power of two in [256, 16384].
-    let node = ctx.create_script_processor_with_buffer_size_and_number_of_input_channels_and_number_of_output_channels(2048, 0, 2)?;
-    node.connect_with_audio_node(&ctx.destination())?;
-
-    let host: Rc<RefCell<crate::wasm_host::Inner>> = inner;
-    // The APU's output rate is fixed, so we build a *persistent* resampler:
-    // recreating it per callback would reset its phase (`pos`/`prev`) and click
-    // at every buffer boundary. The output buffer is reused too.
+    let device_rate = (ctx.sample_rate() as u32).max(1);
     let source_rate = source_rate.max(1);
-    let mut resampler = Resampler::new(source_rate, device_rate.max(1));
-    let mut resampled: Vec<f32> = Vec::new();
-    let closure = Closure::wrap(Box::new(move |ev: Event| {
-        // ScriptProcessorNode's onaudioprocess is the only place where the
-        // runtime asks us to produce samples. Advance the emulator and produce
-        // audio for *this* batch.
-        let ev: AudioProcessingEvent = ev.unchecked_into();
-        let output = match ev.output_buffer() {
-            Ok(b) => b,
-            Err(_) => return,
-        };
-        if source_rate == 0 || device_rate == 0 {
-            return;
-        }
 
-        let mut host = host.borrow_mut();
-        // Output length in frames at the device rate; produce that many frames
-        // worth of (resampled) APU output.
-        let out_frames = output.length() as usize;
-        // While fast-forward is held, the rAF loop drives the console at the
-        // turbo multiplier and fast-forward is muted (matches desktop). Emit
-        // silence and don't step here — stepping too would double-drive it.
-        if host.keys_down.contains(crate::input::TURBO_KEY) {
-            let silence = vec![0.0f32; out_frames];
-            let _ = output.copy_to_channel_with_start_in_channel(&silence, 0, 0);
-            let _ = output.copy_to_channel_with_start_in_channel(&silence, 1, 0);
-            return;
-        }
-        // Source frames required, rounded up so we never under-fill.
-        let need_source_frames =
-            (out_frames * source_rate as usize).div_ceil(device_rate as usize);
-        // The core has no public "run N cycles" entry point, so step whole
-        // instructions until we've spent roughly this batch's cycle budget.
-        let need_cycles = (need_source_frames as u64) * (4_194_304u64 / source_rate as u64);
-        let mut spent = 0u64;
-        while spent < need_cycles {
-            spent += host.console.step() as u64;
-        }
-        let apu_samples = host.console.take_audio_samples();
-        // Interleaved stereo f32 at `source_rate`; cap to keep it bounded.
-        let truncated = if apu_samples.len() > RESAMPLE_BUF_CAP {
-            &apu_samples[apu_samples.len() - RESAMPLE_BUF_CAP..]
-        } else {
-            &apu_samples[..]
-        };
+    // Load the worklet module from an inline blob URL (no separately served file).
+    let parts = js_sys::Array::of1(&JsValue::from_str(WORKLET_JS));
+    let bag = BlobPropertyBag::new();
+    bag.set_type("text/javascript");
+    let blob = Blob::new_with_str_sequence_and_options(&parts, &bag)?;
+    let url = Url::create_object_url_with_blob(&blob)?;
+    let add = ctx.audio_worklet()?.add_module(&url)?;
+    let load = JsFuture::from(add).await;
+    let _ = Url::revoke_object_url(&url);
+    load?;
 
-        // Resample through the persistent resampler (continuous phase across
-        // callbacks), reusing the output buffer, then pad/truncate to exactly
-        // out_frames * 2 interleaved.
-        resampled.clear();
-        resampler.process(truncated, &mut resampled);
-        if resampled.len() < out_frames * 2 {
-            resampled.resize(out_frames * 2, 0.0);
-        } else if resampled.len() > out_frames * 2 {
-            resampled.truncate(out_frames * 2);
-        }
-
-        // `copyToChannel` wants a non-interleaved slice, so deinterleave.
-        let mut left: Vec<f32> = resampled.iter().step_by(2).copied().collect();
-        let mut right: Vec<f32> = resampled.iter().skip(1).step_by(2).copied().collect();
-        if left.len() < out_frames {
-            left.resize(out_frames, 0.0);
-        }
-        if right.len() < out_frames {
-            right.resize(out_frames, 0.0);
-        }
-        let _ = output.copy_to_channel_with_start_in_channel(&left, 0, 0);
-        let _ = output.copy_to_channel_with_start_in_channel(&right, 1, 0);
-    }) as Box<dyn FnMut(Event)>);
-
-    // `set_onaudioprocess` is a property setter; the closure-as-property
-    // pattern requires `as_ref().unchecked_ref()`.
-    node.set_onaudioprocess(Some(closure.as_ref().unchecked_ref()));
-
-    // Leak the closure so it outlives this call. Audio is enabled at most once
-    // per page (the button early-returns once `audio_enabled`), so this is a
-    // bounded, one-time leak — no need to park it in a field on `Inner`.
-    closure.forget();
+    // Stereo source node (no inputs, one 2-channel output).
+    let opts = AudioWorkletNodeOptions::new();
+    let chans = js_sys::Array::of1(&JsValue::from_f64(2.0));
+    opts.set_output_channel_count(chans.as_ref());
+    let node = AudioWorkletNode::new_with_options(&ctx, "rgametoy-audio", &opts)?;
+    node.connect_with_audio_node(&ctx.destination())?;
+    let port = node.port()?;
 
     Ok(AudioPlayer {
-        ctx,
-        node,
+        resampler: Resampler::new(source_rate, device_rate),
+        resampled: Vec::new(),
+        source_rate,
         device_rate,
+        port,
+        node,
+        ctx,
     })
 }
 
 impl AudioPlayer {
-    /// Resume the AudioContext. Modern browsers suspend the context on
-    /// creation; the user has to do something (click) before audio
-    /// actually flows. Call this from a click handler.
+    /// Resample this frame's APU output (interleaved stereo at the source rate)
+    /// to the device rate and post it to the worklet. Called once per emulated
+    /// frame by the rAF loop while audio is on and not fast-forwarding.
+    pub fn feed(&mut self, apu_samples: &[f32]) {
+        if self.source_rate == 0 || self.device_rate == 0 || apu_samples.is_empty() {
+            return;
+        }
+        self.resampled.clear();
+        self.resampler.process(apu_samples, &mut self.resampled);
+        if self.resampled.is_empty() {
+            return;
+        }
+        let arr = js_sys::Float32Array::from(self.resampled.as_slice());
+        let _ = self.port.post_message(arr.as_ref());
+    }
+
+    /// Resume the AudioContext (from a user gesture — required to start audio).
     pub fn resume(&self) -> Result<(), JsValue> {
         let _ = self.ctx.resume()?;
         Ok(())
     }
 
-    /// Suspend audio output (e.g. when the tab loses focus). The emulator
-    /// keeps running visually.
+    /// Suspend audio output (on disable / tab blur). Emulation keeps running.
     pub fn suspend(&self) -> Result<(), JsValue> {
         let _ = self.ctx.suspend()?;
         Ok(())
     }
 }
-
-// Avoid orphan import warnings on a couple of types we want to keep for
-// the closure's downcast even if we don't name them at module scope.
-#[allow(dead_code)]
-fn _ensure_targets(_: &EventTarget, _: &AudioBuffer) {}
