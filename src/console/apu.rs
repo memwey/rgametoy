@@ -121,7 +121,7 @@ struct SquareChannel {
     duty: u8,
     duty_pos: u8,
     frequency: u16,
-    freq_timer: u16,
+    freq_timer: u32,
     length_counter: u16,
     length_enabled: bool,
     env: Envelope,
@@ -157,17 +157,17 @@ impl SquareChannel {
         }
     }
 
-    fn period(&self) -> u16 {
-        (2048 - self.frequency) * 4
+    fn period(&self) -> u32 {
+        u32::from(2048 - self.frequency) * 4
     }
 
     fn tick(&mut self, mut cycles: u32) {
         while cycles > 0 {
-            if self.freq_timer as u32 > cycles {
-                self.freq_timer -= cycles as u16;
+            if self.freq_timer > cycles {
+                self.freq_timer -= cycles;
                 break;
             }
-            cycles -= self.freq_timer as u32;
+            cycles -= self.freq_timer;
             self.freq_timer = self.period();
             self.duty_pos = (self.duty_pos + 1) & 7;
         }
@@ -255,7 +255,7 @@ struct WaveChannel {
     enabled: bool,
     dac: Dac,
     frequency: u16,
-    freq_timer: u16,
+    freq_timer: u32,
     position: u8,
     sample_buffer: u8,
     volume_code: u8,
@@ -280,17 +280,17 @@ impl WaveChannel {
         }
     }
 
-    fn period(&self) -> u16 {
-        (2048 - self.frequency) * 2
+    fn period(&self) -> u32 {
+        u32::from(2048 - self.frequency) * 2
     }
 
     fn tick(&mut self, mut cycles: u32) {
         while cycles > 0 {
-            if self.freq_timer as u32 > cycles {
-                self.freq_timer -= cycles as u16;
+            if self.freq_timer > cycles {
+                self.freq_timer -= cycles;
                 break;
             }
-            cycles -= self.freq_timer as u32;
+            cycles -= self.freq_timer;
             self.freq_timer = self.period();
             self.position = (self.position + 1) & 31;
             let byte = self.wave_ram[(self.position / 2) as usize];
