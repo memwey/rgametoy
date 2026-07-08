@@ -134,6 +134,27 @@ impl MemoryBus {
         self.dma_remaining = 160 * 4; // 160 M-cycles
     }
 
+    /// Whether a CPU access to `addr` conflicts with an in-progress OAM DMA.
+    ///
+    /// The transfer drives one of the two buses depending on its source: a VRAM
+    /// source ($80-$9F) drives the *video* bus (VRAM + OAM), any other source
+    /// drives the *external* bus (ROM / cart RAM / WRAM + echo). The CPU may
+    /// freely use the other bus, plus I/O and HRAM; only OAM (the destination)
+    /// is locked regardless. So e.g. a DMA from VRAM still lets the CPU fetch
+    /// opcodes from ROM while its OAM reads return open bus.
+    fn dma_conflicts(&self, addr: u16) -> bool {
+        if self.dma_remaining == 0 {
+            return false;
+        }
+        let video_dma = (0x80..=0x9F).contains(&self.dma_source);
+        match addr {
+            0xFE00..=0xFE9F => true,                         // OAM (destination)
+            0x8000..=0x9FFF => video_dma,                    // VRAM (video bus)
+            0x0000..=0x7FFF | 0xA000..=0xFDFF => !video_dma, // external bus
+            _ => false,                                       // FEA0-FEFF, I/O, HRAM
+        }
+    }
+
     /// Address-decoded read with no OAM-DMA blocking applied. `read_byte` layers
     /// the block on top; the DMA source copy uses this directly.
     fn read_raw(&self, addr: u16) -> u8 {
@@ -192,22 +213,17 @@ impl Bus for MemoryBus {
     }
 
     fn read_byte(&self, addr: u16) -> u8 {
-        // While OAM DMA runs the CPU cannot reach the external bus or OAM, which
-        // read as open bus. I/O registers and HRAM are on the internal bus and
-        // stay readable (e.g. FF46 returns its last written value; IF/IE keep
-        // being polled) — matching the write block above.
-        if self.dma_remaining > 0 && addr < 0xFEA0 {
+        // A read conflicting with the transfer sees open bus.
+        if self.dma_conflicts(addr) {
             return 0xFF;
         }
         self.read_raw(addr)
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) {
-        // While OAM DMA runs the CPU cannot drive the external bus or OAM (the
-        // DMA owns them), so those writes are dropped — e.g. a PUSH with the
-        // stack in OAM does not land mid-transfer. I/O registers and HRAM stay
-        // writable, so FF46 can still restart the transfer.
-        if self.dma_remaining > 0 && addr < 0xFEA0 {
+        // A write conflicting with the transfer is dropped (the DMA owns that
+        // bus) — e.g. a PUSH with the stack in OAM does not land mid-transfer.
+        if self.dma_conflicts(addr) {
             return;
         }
         match addr {
