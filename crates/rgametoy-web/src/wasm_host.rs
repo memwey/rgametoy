@@ -37,6 +37,10 @@ const TURBO_FRAMES_PER_TICK: u32 = 4;
 /// a tab crash loses at most ~2 s of progress.
 const AUTOSAVE_DEBOUNCE: u64 = 120;
 
+/// T-cycles in one DMG frame — used to turn the core's `total_cycles` delta
+/// into an emulated frame count for the fps readout.
+const CYCLES_PER_FRAME: f64 = 70224.0;
+
 /// Register a page-lifetime event listener whose handler receives the event,
 /// leaking the closure so it stays valid for the document's lifetime. Every
 /// listener wired here is set once at startup and never removed, so `forget()`
@@ -123,9 +127,12 @@ pub struct Inner {
     /// Counter that ticks once per rAF loop. Every [`AUTOSAVE_DEBOUNCE`]
     /// frames we flush a dirty battery-RAM record back to IDB.
     pub frame_idx: u64,
-    /// Frames rendered in the last second. Updated by the rAF loop, read
-    /// out to `#fps` once a wall-clock second has passed.
-    pub fps_count: u32,
+    /// True emulation rate: `total_cycles` at the last `#fps` update and the
+    /// wall-clock time of it. We derive fps from the *emulated* cycles elapsed
+    /// (works whether the rAF loop or the audio callback is driving), not from
+    /// how often we repaint — a 144 Hz panel repaints 144×/s but the DMG still
+    /// runs at ~59.7.
+    pub fps_cycles_ref: u64,
     pub fps_last_ms: f64,
     /// Real-time frame pacing (rAF-driven path only): accumulated real
     /// milliseconds not yet spent on emulated frames, and the previous tick's
@@ -174,7 +181,7 @@ impl Inner {
             host_rc: None,
             rom_hash: String::new(),
             frame_idx: 0,
-            fps_count: 0,
+            fps_cycles_ref: 0,
             fps_last_ms: 0.0,
             frame_accum_ms: 0.0,
             last_tick_ms: 0.0,
@@ -458,17 +465,21 @@ impl Inner {
         }
         self.frame_idx = self.frame_idx.wrapping_add(1);
 
-        // FPS: count frames, recompute the displayed value once per
-        // wall-clock second. The current rAF rate is a useful indicator
-        // that the user can match against their monitor's refresh rate.
-        self.fps_count = self.fps_count.saturating_add(1);
+        // FPS: report the *emulation* rate, recomputed once per wall-clock
+        // second from the emulated cycles elapsed. This reads ~60 whether the
+        // rAF loop or the audio callback is driving, and doesn't track the
+        // display's refresh rate the way a per-repaint counter would.
         let now = js_sys::Date::now();
         if self.fps_last_ms == 0.0 {
             self.fps_last_ms = now;
+            self.fps_cycles_ref = self.console.total_cycles();
         } else if now - self.fps_last_ms >= 1000.0 {
-            let fps = self.fps_count;
-            self.fps_count = 0;
+            let cycles = self.console.total_cycles();
+            let frames = cycles.saturating_sub(self.fps_cycles_ref) as f64 / CYCLES_PER_FRAME;
+            let secs = (now - self.fps_last_ms) / 1000.0;
+            let fps = (frames / secs).round() as u32;
             self.fps_last_ms = now;
+            self.fps_cycles_ref = cycles;
             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
                 if let Ok(el) = get_html_element(&doc, "fps") {
                     set_text(&el, &format!("{fps} fps"));
@@ -601,13 +612,19 @@ impl WasmHost {
         if inner.audio_enabled {
             return Ok(());
         }
-        // Read the APU rate under the borrow; `enable` must not re-borrow.
-        let source_rate = inner.console.audio_output_rate();
-        let player = crate::audio::enable(self.inner.clone(), source_rate)?;
-        if let Err(e) = player.resume() {
-            weblog::error_val("audio: failed to resume the AudioContext", &e);
+        // Reuse the one context across enable/disable cycles: build it only the
+        // first time (reading the APU rate under the borrow — `enable` must not
+        // re-borrow this cell), then just resume.
+        if inner.audio.is_none() {
+            let source_rate = inner.console.audio_output_rate();
+            let player = crate::audio::enable(self.inner.clone(), source_rate)?;
+            inner.audio = Some(player);
         }
-        inner.audio = Some(player);
+        if let Some(player) = inner.audio.as_ref() {
+            if let Err(e) = player.resume() {
+                weblog::error_val("audio: failed to resume the AudioContext", &e);
+            }
+        }
         inner.audio_enabled = true;
         inner.set_status("audio: on");
         Ok(())
@@ -829,37 +846,54 @@ impl WasmHost {
             host_shot.borrow_mut().screenshot_pending = true;
         })?;
 
-        // Enable audio — the only button that needs to know its own
-        // element so it can relabel itself. Web Audio policies require
-        // the AudioContext to be resumed from a user gesture, hence
-        // the action is gated to a button click.
+        // Audio toggle — the only button that needs its own element so it can
+        // relabel itself. It reuses a single AudioContext across toggles:
+        // built lazily on first enable (Web Audio requires a user gesture to
+        // start), then suspended/resumed. While suspended the callback stops
+        // firing, so the rAF loop takes back over driving emulation.
         let host_audio: Rc<RefCell<Inner>> = self.inner.clone();
         let audio_btn: web_sys::HtmlElement = get_html_element(&doc, "audio-button")?;
         let audio_btn_for_cb: web_sys::HtmlElement = audio_btn.clone();
         on_click(&audio_btn, move || {
             let mut h = host_audio.borrow_mut();
             if h.audio_enabled {
+                // Disable: suspend the context; the rAF loop drives again.
+                if let Some(player) = h.audio.as_ref() {
+                    if let Err(e) = player.suspend() {
+                        weblog::error_val("audio: failed to suspend the AudioContext", &e);
+                    }
+                }
+                h.audio_enabled = false;
+                // Hand pacing back to the rAF loop with a fresh clock so it
+                // doesn't try to catch up for the silent interval.
+                h.last_tick_ms = 0.0;
+                h.frame_accum_ms = 0.0;
+                h.set_status("audio: off");
+                audio_btn_for_cb.set_text_content(Some("Enable audio"));
                 return;
             }
-            // Read the APU rate while we hold the borrow and hand it to `enable`,
-            // which must not re-borrow this same `RefCell` (it would panic).
-            let source_rate = h.console.audio_output_rate();
-            match crate::audio::enable(host_audio.clone(), source_rate) {
-                Ok(player) => {
-                    if let Err(e) = player.resume() {
-                        weblog::error_val("audio: failed to resume the AudioContext", &e);
+            // Enable: build the graph on first use (reads the APU rate under the
+            // borrow — `enable` must not re-borrow this cell or it panics).
+            if h.audio.is_none() {
+                let source_rate = h.console.audio_output_rate();
+                match crate::audio::enable(host_audio.clone(), source_rate) {
+                    Ok(player) => h.audio = Some(player),
+                    Err(e) => {
+                        weblog::error_val("audio init failed", &e);
+                        let msg = e.as_string().unwrap_or_else(|| "audio init failed".to_string());
+                        h.set_status(&format!("audio: {msg}"));
+                        return;
                     }
-                    h.audio = Some(player);
-                    h.audio_enabled = true;
-                    h.set_status("audio: on");
-                    audio_btn_for_cb.set_text_content(Some("Disable audio"));
-                }
-                Err(e) => {
-                    weblog::error_val("audio init failed", &e);
-                    let msg = e.as_string().unwrap_or_else(|| "audio init failed".to_string());
-                    h.set_status(&format!("audio: {msg}"));
                 }
             }
+            if let Some(player) = h.audio.as_ref() {
+                if let Err(e) = player.resume() {
+                    weblog::error_val("audio: failed to resume the AudioContext", &e);
+                }
+            }
+            h.audio_enabled = true;
+            h.set_status("audio: on");
+            audio_btn_for_cb.set_text_content(Some("Disable audio"));
         })?;
         Ok(())
     }

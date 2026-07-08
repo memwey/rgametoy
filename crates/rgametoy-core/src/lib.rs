@@ -146,6 +146,14 @@ impl Console {
         self.sys.audio_output_rate()
     }
 
+    /// Total T-cycles executed since power-on. Divided by the 70224 cycles in a
+    /// DMG frame this is the emulated frame count — a frontend can sample it over
+    /// a wall-clock second to show the true emulation rate (independent of how
+    /// often it repaints).
+    pub fn total_cycles(&self) -> u64 {
+        self.total_cycles
+    }
+
     /// The inserted cartridge — the owner of battery-RAM persistence. Battery
     /// saves are a cartridge concern, so a frontend flushes `.save_ram_bytes()`
     /// / checks `.ram_dirty()` here directly; the console does not mediate them.
