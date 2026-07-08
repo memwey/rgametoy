@@ -601,7 +601,9 @@ impl WasmHost {
         if inner.audio_enabled {
             return Ok(());
         }
-        let player = crate::audio::enable(self.inner.clone())?;
+        // Read the APU rate under the borrow; `enable` must not re-borrow.
+        let source_rate = inner.console.audio_output_rate();
+        let player = crate::audio::enable(self.inner.clone(), source_rate)?;
         if let Err(e) = player.resume() {
             weblog::error_val("audio: failed to resume the AudioContext", &e);
         }
@@ -839,7 +841,10 @@ impl WasmHost {
             if h.audio_enabled {
                 return;
             }
-            match crate::audio::enable(host_audio.clone()) {
+            // Read the APU rate while we hold the borrow and hand it to `enable`,
+            // which must not re-borrow this same `RefCell` (it would panic).
+            let source_rate = h.console.audio_output_rate();
+            match crate::audio::enable(host_audio.clone(), source_rate) {
                 Ok(player) => {
                     if let Err(e) = player.resume() {
                         weblog::error_val("audio: failed to resume the AudioContext", &e);

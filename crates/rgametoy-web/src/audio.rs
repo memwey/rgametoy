@@ -36,6 +36,12 @@ const RESAMPLE_BUF_CAP: usize = 16384;
 /// buffer. The caller passes in the shared `Rc<RefCell<Inner>>` so the
 /// callback can run frames on the same `Console` the rAF loop is reading.
 ///
+/// `source_rate` (the APU's fixed output rate) is passed in rather than read
+/// from `inner` here: the callers hold a `borrow_mut()` on the same `RefCell`
+/// while calling this, so a `borrow()` inside would panic ("already mutably
+/// borrowed"). `inner` is only ever touched *asynchronously* — when the audio
+/// callback fires — never synchronously in this function.
+///
 /// Returns the live `AudioPlayer` (kept in `Inner::audio` so the GC doesn't
 /// reap the AudioContext); the `onaudioprocess` closure is leaked internally.
 /// The context is *not* resumed — modern browsers gate `AudioContext` on a
@@ -43,6 +49,7 @@ const RESAMPLE_BUF_CAP: usize = 16384;
 /// `AudioPlayer::resume` after the click.
 pub fn enable(
     inner: Rc<RefCell<crate::wasm_host::Inner>>,
+    source_rate: u32,
 ) -> Result<AudioPlayer, JsValue> {
     let ctx = AudioContext::new()?;
     let device_rate = ctx.sample_rate() as u32;
@@ -53,10 +60,10 @@ pub fn enable(
     node.connect_with_audio_node(&ctx.destination())?;
 
     let host: Rc<RefCell<crate::wasm_host::Inner>> = inner;
-    // The APU's output rate is fixed, so read it once and build a *persistent*
-    // resampler: recreating it per callback would reset its phase (`pos`/`prev`)
-    // and click at every buffer boundary. The output buffer is reused too.
-    let source_rate = host.borrow().console.audio_output_rate().max(1);
+    // The APU's output rate is fixed, so we build a *persistent* resampler:
+    // recreating it per callback would reset its phase (`pos`/`prev`) and click
+    // at every buffer boundary. The output buffer is reused too.
+    let source_rate = source_rate.max(1);
     let mut resampler = Resampler::new(source_rate, device_rate.max(1));
     let mut resampled: Vec<f32> = Vec::new();
     let closure = Closure::wrap(Box::new(move |ev: Event| {
