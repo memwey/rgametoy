@@ -315,7 +315,10 @@ impl Emulator {
             return;
         }
         match std::fs::rename(&tmp, &path) {
-            Ok(()) => self.console.cartridge_mut().clear_ram_dirty(),
+            Ok(()) => {
+                self.console.cartridge_mut().clear_ram_dirty();
+                log::info(&format!("battery saved ({} KiB)", ram.len() / 1024));
+            }
             Err(e) => {
                 log::error(&format!("failed to replace save {}: {e}", path.display()));
                 let _ = std::fs::remove_file(&tmp); // don't leave the temp behind

@@ -247,9 +247,17 @@ impl Inner {
         }
         let ram = self.console.cartridge().ram().to_vec();
         // Only write if the cartridge actually has RAM — saves with no
-        // external RAM are pointless, and the dirty-flag check (a
-        // separate code path) would not be triggered anyway.
-        let ram = if ram.is_empty() { None } else { Some(ram) };
+        // external RAM are pointless, and the dirty-flag check (a separate code
+        // path) would not be triggered anyway. Log to the console (not the
+        // status bar — this is a ~2 s background flush, not a user action).
+        let ram = if ram.is_empty() {
+            None
+        } else {
+            web_sys::console::log_1(
+                &format!("battery saved ({} KiB)", ram.len() / 1024).into(),
+            );
+            Some(ram)
+        };
         let record = SaveRecord {
             rom_hash: self.rom_hash.clone(),
             rom_title: self.title.clone(),
