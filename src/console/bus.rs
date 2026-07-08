@@ -86,7 +86,11 @@ impl MemoryBus {
     }
 
     pub fn set_buttons(&mut self, state: u8) {
-        self.p1.update_button_state(state);
+        // The joypad hardware raises the interrupt itself, gated by the P1
+        // select lines — a press only interrupts if its group is selected.
+        if self.p1.update_button_state(state) {
+            self.if_register |= InterruptType::Joypad.to_bit();
+        }
     }
 
     pub fn load_cartridge(&mut self, cartridge: Cartridge) {
@@ -252,7 +256,13 @@ impl Bus for MemoryBus {
             0xE000..=0xFDFF => self.wram.write_byte(addr, value), // Echo RAM
             0xFE00..=0xFE9F => self.ppu.write_oam(addr, value),
             0xFEA0..=0xFEFF => {} // Not usable
-            0xFF00 => self.p1.write_register(value),
+            0xFF00 => {
+                // Re-selecting a group that holds a pressed button is itself a
+                // high→low edge on the input lines, so a write can interrupt.
+                if self.p1.write_register(value) {
+                    self.if_register |= InterruptType::Joypad.to_bit();
+                }
+            }
             0xFF01 | 0xFF02 => self.serial.write_register(addr, value),
             0xFF04..=0xFF07 => self.timer.write_register(addr, value),
             0xFF0F => self.if_register = value & 0x1F,

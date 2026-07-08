@@ -30,7 +30,6 @@ fn frame_budget(speed: f64) -> Duration {
 pub struct Emulator {
     console: Console,
     display: Display,
-    prev_buttons: u8,
     /// Speed multiplier applied while the fast-forward key is held.
     turbo_speed: f64,
     /// Instant save-state slot, plus previous key states for edge detection.
@@ -69,7 +68,6 @@ impl Emulator {
         Emulator {
             console,
             display: Display::new(),
-            prev_buttons: 0xFF,
             turbo_speed: DEFAULT_TURBO_SPEED,
             quick_state: None,
             prev_save: false,
@@ -241,13 +239,9 @@ impl Emulator {
     }
 
     fn apply_input(&mut self, input: &crate::emulator::input::InputState) {
-        // A bit going 1 (released) -> 0 (pressed) is a new key press.
-        let newly_pressed = self.prev_buttons & !input.buttons;
+        // The joypad hardware raises the interrupt itself (gated by the P1
+        // select lines), so the frontend just forwards the button state.
         self.console.set_buttons(input.buttons);
-        if newly_pressed != 0 {
-            self.console.request_joypad_interrupt();
-        }
-        self.prev_buttons = input.buttons;
     }
 
     pub fn get_console(&self) -> &Console {

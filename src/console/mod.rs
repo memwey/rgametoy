@@ -15,7 +15,6 @@ pub mod wram;
 use crate::console::bus::{Bus, MemoryBus};
 use crate::console::cartridge::Cartridge;
 use crate::console::cpu::Cpu;
-use crate::console::interrupts::InterruptType;
 
 // The Game Boy runs at 4.194304 MHz. One frame is 154 scanlines × 456 dots =
 // 70224 T-cycles.
@@ -138,14 +137,11 @@ impl Console {
         self.clone_from(&state.0);
     }
 
-    /// Update the joypad button state (0 = pressed) and raise a Joypad
-    /// interrupt if any newly-pressed button was passed.
+    /// Update the joypad button state (0 = pressed). The joypad hardware raises
+    /// its interrupt itself, gated by the P1 select lines (a press only
+    /// interrupts if its group is currently selected).
     pub fn set_buttons(&mut self, state: u8) {
         self.bus.set_buttons(state);
-    }
-
-    pub fn request_joypad_interrupt(&mut self) {
-        self.bus.request_interrupt(InterruptType::Joypad);
     }
 
     pub fn get_cpu(&self) -> &Cpu {
