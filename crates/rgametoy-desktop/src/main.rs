@@ -1,4 +1,4 @@
-use rgametoy_desktop::emulator::{log, Emulator};
+use rgametoy_desktop::{log, Emulator};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {

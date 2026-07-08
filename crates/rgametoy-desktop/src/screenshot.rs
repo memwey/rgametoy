@@ -10,8 +10,8 @@
 //! wants.
 
 use rgametoy_core::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
-use crate::emulator::palette::Palette;
-use crate::emulator::paths::sanitize;
+use crate::palette::Palette;
+use crate::paths::sanitize;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -73,7 +73,7 @@ pub fn save(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::palette;
+    use crate::palette;
 
     #[test]
     fn bmp_has_a_valid_header_and_pixel_size() {

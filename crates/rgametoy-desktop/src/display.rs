@@ -1,5 +1,5 @@
 use rgametoy_core::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
-use crate::emulator::palette;
+use crate::palette;
 use minifb::{Key, Scale, Window, WindowOptions};
 
 /// Window upscale factor. minifb's backend (Metal on macOS) uploads a texture

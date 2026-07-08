@@ -4,12 +4,12 @@
 //! Run with: `cargo run --example screenshot -- rom.gb out.bmp [frames]`
 //!
 //! The BMP encoding is shared with the interactive emulator's F2 screenshot
-//! (`rgametoy_desktop::emulator::screenshot`), so both produce identical images.
+//! (`rgametoy_desktop::screenshot`), so both produce identical images.
 
 use rgametoy_core::cartridge::Cartridge;
 use rgametoy_core::Console;
-use rgametoy_desktop::emulator::palette;
-use rgametoy_desktop::emulator::screenshot::encode_bmp;
+use rgametoy_desktop::palette;
+use rgametoy_desktop::screenshot::encode_bmp;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

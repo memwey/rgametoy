@@ -152,7 +152,7 @@ where
                 }
             }
         },
-        |err| crate::emulator::log::error(&format!("audio stream: {err}")),
+        |err| crate::log::error(&format!("audio stream: {err}")),
         None,
     )
 }

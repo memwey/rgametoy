@@ -37,11 +37,11 @@ the `RGAMETOY_DATA_DIR` environment variable:
 
 **Screenshots**: `F2` saves the current frame at native 160×144 as a 24-bit BMP
 (pixel-exact, good for debugging) and prints the path. The encoder is shared with
-the headless `-p rgametoy-desktop --example screenshot` (`crates/rgametoy-desktop/src/emulator/screenshot.rs`), so the window
+the headless `-p rgametoy-desktop --example screenshot` (`crates/rgametoy-desktop/src/screenshot.rs`), so the window
 and the screenshots use the same colours.
 
 **Palettes**: the core only emits shade values 0–3, so mapping them to colours is
-a pure frontend choice (`crates/rgametoy-desktop/src/emulator/palette.rs`). `F3` cycles through a few
+a pure frontend choice (`crates/rgametoy-desktop/src/palette.rs`). `F3` cycles through a few
 built-in palettes — the classic DMG green plus tinted variants (grayscale, amber,
 ocean, berry) that colourise the four shades. Screenshots use whichever palette is
 active. The default is DMG green.
@@ -53,7 +53,7 @@ stays cheap. The window title shows the live fps, speed multiplier, and palette;
 with `--features debug` it also shows the per-frame core-vs-present time split.
 
 **Logging**: frontend messages go through a tiny dependency-free logger
-(`crates/rgametoy-desktop/src/emulator/log.rs`) — `info` to stdout, `warn`/`error` to stderr, with ANSI
+(`crates/rgametoy-desktop/src/log.rs`) — `info` to stdout, `warn`/`error` to stderr, with ANSI
 colour only when the stream is a terminal and `NO_COLOR` is unset. A test ROM's
 serial output is printed raw, never tagged.
 
@@ -88,7 +88,7 @@ be a third frontend on the same core.
 ```text
   crates/rgametoy-desktop   native frontend — window, input, audio, files (minifb / cpal)
   ───────────────────────   main → Emulator::run(): poll input → run_frame → present → pace
-       emulator/            display · input · audio · screenshot · palette · log · paths
+       modules:             display · input · audio · screenshot · palette · log · paths
                  │  run_frame() / framebuffer()          ▲  set_buttons()
                  ▼  depends on ↓                          │
   crates/rgametoy-core      the emulated DMG — deterministic, no host I/O, wasm-ready
