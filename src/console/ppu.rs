@@ -106,6 +106,10 @@ pub struct Ppu {
     sprite_fetched: [bool; 10],
     sprite_delay: u8,       // dots left in an in-progress sprite fetch
     sprite_index: usize,    // line_sprites slot being fetched
+    /// OAM X of the most recently fetched sprite, while output is still
+    /// paused: another sprite at the *same* X pays only the 6-dot fetch (the
+    /// background-fetch abort part of the penalty is paid once per X).
+    sprite_last_x: Option<u8>,
     warmup: u8,             // fetcher startup stall at the start of mode 3
     lcd_on_line0: bool,
     /// A STAT interrupt raised by a register write (LCD enable / LYC / STAT),
@@ -158,6 +162,7 @@ impl Ppu {
             sprite_fetched: [false; 10],
             sprite_delay: 0,
             sprite_index: 0,
+            sprite_last_x: None,
             warmup: 0,
             lcd_on_line0: false,
             stat_irq_pending: false,
@@ -341,10 +346,11 @@ impl Ppu {
         self.discard = self.scx & 7;
         self.window_active = false;
         self.sprite_delay = 0;
+        self.sprite_last_x = None;
         // The BG fetcher needs a fixed startup before the first pixel can be
-        // pushed, so mode 3 is 172 dots at SCX 0 (not the 167 the bare FIFO
+        // pushed, so mode 3 is 172 dots at SCX 0 (not what the bare FIFO
         // warmup yields). Model the missing dots as an explicit stall.
-        self.warmup = 5;
+        self.warmup = 6;
     }
 
     /// Select up to 10 sprites overlapping this line, in OAM order.
@@ -373,9 +379,14 @@ impl Ppu {
             return;
         }
 
-        // A sprite fetch pauses the background pipeline.
+        // A sprite fetch pauses pixel output. The background fetcher restarts
+        // and keeps working underneath (its lost progress is exactly what the
+        // penalty priced in), so the FIFO refills during the pause and no
+        // extra bubble appears after the merge — mode 3 stretches by the
+        // penalty alone.
         if self.sprite_delay > 0 {
             self.sprite_delay -= 1;
+            self.advance_fetcher();
             if self.sprite_delay == 0 {
                 self.merge_sprite();
             }
@@ -405,23 +416,30 @@ impl Ppu {
             return;
         }
 
-        // A sprite at this X pauses output while it is fetched. The penalty is
-        // 6-11 dots: the fetch plus a wait for the background fetcher, which
-        // depends on the sprite's alignment within the tile under it —
+        // A sprite at this X pauses output while it is fetched. The first
+        // sprite at a given position pays 6-11 dots: the 6-dot OBJ fetch plus
+        // an abort of the in-flight background fetch, which depends on the
+        // sprite's alignment within the tile under it —
         // `11 - min(5, (x + SCX) mod 8)`, and X=0 always costs the full 11.
+        // Further sprites at the *same* position pay only the 6-dot fetch:
+        // the background fetcher is already parked (mooneye
+        // intr_2_mode0_timing_sprites: 10 stacked sprites cost 5 + 6×10).
         if self.lcdc & 0x02 != 0 {
             if let Some(slot) = self.sprite_at(self.draw_x) {
                 self.sprite_index = slot;
                 self.sprite_fetched[slot] = true;
                 let obj_x = self.oam[self.line_sprites[slot] as usize * 4 + 1];
-                let penalty = if obj_x == 0 {
+                let penalty = if self.sprite_last_x == Some(obj_x) {
+                    6
+                } else if obj_x == 0 {
                     11
                 } else {
                     11 - ((obj_x as u16 + self.scx as u16) % 8).min(5) as u8
                 };
-                // The pause spans `penalty` dots; our trigger + merge dots
-                // already cost 2, so hold for the remainder.
-                self.sprite_delay = penalty - 2;
+                self.sprite_last_x = Some(obj_x);
+                // The pause spans exactly `penalty` dots: this trigger dot
+                // plus the remaining delay (the merge lands on the last one).
+                self.sprite_delay = penalty - 1;
                 return;
             }
         }
@@ -437,6 +455,8 @@ impl Ppu {
         let px = self.mix(bg, obj);
         self.framebuffer[self.ly as usize * SCREEN_WIDTH + self.draw_x as usize] = px;
         self.draw_x += 1;
+        // Output resumed: the next sprite fetch pays the abort again.
+        self.sprite_last_x = None;
     }
 
     fn window_should_start(&self) -> bool {
@@ -446,8 +466,23 @@ impl Ppu {
             && self.draw_x as u16 + 7 >= self.wx as u16
     }
 
-    /// Advance the background/window fetcher one two-dot step.
+    /// Advance the background/window fetcher one dot: the memory-access steps
+    /// act on a two-dot cadence, while the final push needs no access and
+    /// retries every dot (so an odd-length sprite pause leaves no bubble).
     fn advance_fetcher(&mut self) {
+        if self.fetch_state == FetchState::Push {
+            if self.bg_fifo.is_empty() {
+                for i in 0..8 {
+                    let bit = 7 - i;
+                    let color = ((self.fetch_hi >> bit) & 1) << 1 | ((self.fetch_lo >> bit) & 1);
+                    self.bg_fifo.push_back(color);
+                }
+                self.fetch_x = self.fetch_x.wrapping_add(1);
+                self.fetch_state = FetchState::Tile;
+            }
+            return;
+        }
+
         self.fetch_step = !self.fetch_step;
         if self.fetch_step {
             return; // act on every second dot
@@ -475,17 +510,7 @@ impl Ppu {
                 self.fetch_hi = self.vram[self.tile_data_addr() + 1];
                 self.fetch_state = FetchState::Push;
             }
-            FetchState::Push => {
-                if self.bg_fifo.is_empty() {
-                    for i in 0..8 {
-                        let bit = 7 - i;
-                        let color = ((self.fetch_hi >> bit) & 1) << 1 | ((self.fetch_lo >> bit) & 1);
-                        self.bg_fifo.push_back(color);
-                    }
-                    self.fetch_x = self.fetch_x.wrapping_add(1);
-                    self.fetch_state = FetchState::Tile;
-                }
-            }
+            FetchState::Push => unreachable!("push is handled above, every dot"),
         }
     }
 
@@ -576,9 +601,13 @@ impl Ppu {
     // --- CPU-visible memory & registers ------------------------------------
 
     /// The mode as software observes it: the STAT bits and the lock-release
-    /// edges lag the internal mode transition by 4 dots on hardware.
+    /// edges lag the internal mode transition on hardware. The lag is 4 dots
+    /// out of scan/blank modes but only 1 dot out of Drawing — pinned by
+    /// intr_2_mode0_timing_sprites, whose odd sprite penalties (e.g. 11) break
+    /// the 4-dot sampling degeneracy the other tests leave.
     fn visible_mode(&self) -> PpuMode {
-        if self.transition_age < 4 {
+        let lag = if self.prev_mode == PpuMode::Drawing { 1 } else { 4 };
+        if self.transition_age < lag {
             self.prev_mode
         } else {
             self.mode
