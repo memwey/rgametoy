@@ -83,8 +83,6 @@ pub fn render_frame(ppu: &mut Ppu) {
 // Black-box test-ROM harness (used by the env-gated rom_suite).
 // ---------------------------------------------------------------------------
 
-pub const SCREEN_PIXELS: usize = 160 * 144;
-
 /// Root of the community test-ROM bundle (c-sp/game-boy-test-roms layout),
 /// from `GB_TEST_ROMS`. `None` (test skips) when it is not set.
 pub fn roms_dir() -> Option<PathBuf> {
@@ -135,37 +133,6 @@ pub fn blargg_serial(rom: &[u8]) -> String {
         }
     }
     out
-}
-
-/// Run a ROM for `frames` frames and return its 160x144 shade framebuffer.
-pub fn render_rom(rom: &[u8], frames: u32) -> Vec<u8> {
-    let mut c = boot(rom);
-    for _ in 0..frames {
-        c.run_frame();
-    }
-    c.framebuffer().to_vec()
-}
-
-/// Unpack a 2-bits-per-pixel (MSB-first, 4 px/byte) reference into 160x144
-/// shade bytes, matching the framebuffer layout.
-pub fn unpack_ref(packed: &[u8]) -> Vec<u8> {
-    let mut px = Vec::with_capacity(SCREEN_PIXELS);
-    for &b in packed {
-        px.push((b >> 6) & 3);
-        px.push((b >> 4) & 3);
-        px.push((b >> 2) & 3);
-        px.push(b & 3);
-    }
-    px
-}
-
-/// Count pixels that match between a framebuffer and an unpacked reference.
-pub fn pixel_matches(framebuffer: &[u8], reference: &[u8]) -> usize {
-    framebuffer
-        .iter()
-        .zip(reference)
-        .filter(|(a, b)| a == b)
-        .count()
 }
 
 /// Recursively collect `*.gb` files under `dir`.

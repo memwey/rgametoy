@@ -49,20 +49,22 @@ cargo run --release --example screenshot  -- rom.gb out.bmp         # 无头渲�
 ```
 
 **入库的 ROM 集成测试(`tests/rom_suite.rs`)**:上面的 example 是手动 CLI;`rom_suite`
-把整条黑盒层做成 `cargo test`——设了 `GB_TEST_ROMS` 指向 game-boy-test-roms bundle 根就跑,
-没设就整体 skip(默认 `cargo test` 不受影响):
+把**自带信号**的黑盒套件做成 `cargo test`——设了 `GB_TEST_ROMS` 指向 game-boy-test-roms
+bundle 根就跑,没设就整体 skip(默认 `cargo test` 不受影响):
 
 ```sh
 GB_TEST_ROMS=/path/to/game-boy-test-roms cargo test --release --test rom_suite
 ```
 
-三个断言:mooneye acceptance **非 boot 全过**(遍历,跳过 `boot*`)、Blargg cpu/timing 串口
-"Passed"、mealybug **逐测试不回归**(见下)。ROM 体积大 + 版权,**不入库**;但 mealybug 的
-参考图**入库了**——`tests/fixtures/mealybug/*.bin` 是把每张 `*_dmg_blob.png` 预解码成
-shade(`3 - gray`)再打包 2bpp(每张 5760 字节),`include_bytes!` 进测试二进制。这样对比只是
-一次字节比较、**不需要 PNG 解码器**(Rust std 无 inflate),且把当前逐像素匹配数钉成回归下限
-(棘轮):任何 PPU 改动让某测试相似度下降就红。共享脚手架在 `tests/common/mod.rs`(灰盒 PPU
-helper + 黑盒 ROM runner)。
+两个断言:mooneye acceptance **非 boot 全过**(遍历,跳过 `boot*`)、Blargg cpu/timing 串口
+"Passed"——这两类靠寄存器签名/串口自证,**不需要参考数据**。ROM 体积大 + 版权,**不入库**。
+共享脚手架在 `tests/common/mod.rs`(灰盒 PPU helper + 黑盒 ROM runner)。
+
+mealybug 是**逐像素相似度**(非 pass/fail),且每个测试要一张参考图——而参考图
+(`<name>_dmg_blob.png`)本就和 ROM 同目录躺在 bundle 里,再入库一份纯属冗余。所以它不进
+自动套件,改用 `tools/mealybug_compare.py`(见 §2.4):有 ROM 就读旁边的 PNG 比对,**零入库
+数据**。用 Python 是因为 Rust std 没有 inflate、解 PNG 得引三方库(违背核心不依赖三方库),
+而 Python stdlib 的 zlib 直接能解。
 
 **调试器(`--features debug`)**:标定硬件测试用的项目内检查器(见 `src/console/debug.rs`),
 `Console::snapshot()` 一次性拿到整机可观测状态(含寄存器看不到的 PPU 内部 mode/dot、STAT 线、
@@ -128,8 +130,15 @@ root 组仅剩 11 个失败,**全是 Boot 状态**:`boot_regs-{dmg0,mgb,sgb,sgb2
 
 ### 2.4 mealybug tearoom(DMG)—— 1 / 24 通过,逐像素相似度已量化
 
-用纯 stdlib(zlib)写了个 PNG 比对器 `scratchpad/pngcmp.py`(参考图是 grayscale
-bd=1/2,`3 - g` 极性),对全 24 个逐像素打分 + 定位差异行列。**PASS 需 100%**。
+入库的比对脚手架 `tools/mealybug_compare.py`(纯 stdlib zlib 解 PNG,参考图 grayscale
+bd=1/2、`3 - g` 极性;读 bundle 里和 ROM 同目录的 `*_dmg_blob.png`,零入库数据):
+
+```sh
+GB_TEST_ROMS=/path/to/game-boy-test-roms tools/mealybug_compare.py [name-substr]
+# 打印逐测试相似度 + pixel-perfect 计数(可选 name-substr 只跑一撮)
+```
+
+**PASS 需 100%**。当前:
 
 | 相似度 | 测试 |
 |---|---|
