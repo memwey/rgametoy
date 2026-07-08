@@ -18,7 +18,9 @@ pub const SCREEN_HEIGHT: usize = 144;
 
 const OAM_DOTS: u16 = 80;
 const LINE_DOTS: u16 = 456;
-const LCDON_DELAY: u16 = 2;
+/// The first scanline after the LCD is enabled runs 4 dots short (the PPU
+/// starts late), so LY=1 arrives at dot 452 (mooneye `lcdon_timing`).
+const LCDON_LINE0_DOTS: u16 = LINE_DOTS - 4;
 
 // Interrupt request bits (matches the IF register layout).
 const INT_VBLANK: u8 = 0x01;
@@ -69,6 +71,9 @@ pub struct Ppu {
     /// comparison clock stops when it is off), so the STAT bit and its
     /// interrupt freeze across a power-off and restart on power-on.
     lyc_match: bool,
+    /// Dots left in the blank window after an LY change, during which the
+    /// LY==LYC latch reads 0 before the new comparison is latched (4 dots).
+    lyc_blank: u8,
     frame_ready: bool,
 
     lcdc: u8, // 0xFF40
@@ -123,6 +128,7 @@ impl Ppu {
             transition_age: 0xFF,
             stat_line: false,
             lyc_match: false,
+            lyc_blank: 0,
             frame_ready: false,
             lcdc: 0,
             stat: 0,
@@ -180,6 +186,16 @@ impl Ppu {
         self.lcdc & 0x80 != 0
     }
 
+    /// Length of the current scanline: the first line after enable is 4 dots
+    /// short, every other line is 456.
+    fn line_dots(&self) -> u16 {
+        if self.lcd_on_line0 {
+            LCDON_LINE0_DOTS
+        } else {
+            LINE_DOTS
+        }
+    }
+
     pub fn get_mode(&self) -> PpuMode {
         self.mode
     }
@@ -230,15 +246,16 @@ impl Ppu {
                     }
                 }
                 PpuMode::HBlank => {
-                    if self.lcd_on_line0 {
-                        if self.dots == OAM_DOTS + LCDON_DELAY {
-                            self.start_drawing();
-                            self.mode = PpuMode::Drawing;
-                            self.lcd_on_line0 = false;
-                        }
-                    } else if self.dots >= LINE_DOTS {
+                    if self.lcd_on_line0 && self.dots == OAM_DOTS {
+                        // First line after enable: no OAM scan; drawing begins
+                        // at the usual dot 80 out of the fake HBlank.
+                        self.start_drawing();
+                        self.mode = PpuMode::Drawing;
+                    } else if self.dots >= self.line_dots() {
                         self.dots = 0;
+                        self.lcd_on_line0 = false;
                         self.ly += 1;
+                        self.lyc_blank = 4;
                         if self.ly == SCREEN_HEIGHT as u8 {
                             self.mode = PpuMode::VBlank;
                             self.frame_ready = true;
@@ -252,6 +269,7 @@ impl Ppu {
                     if self.dots >= LINE_DOTS {
                         self.dots = 0;
                         self.ly += 1;
+                        self.lyc_blank = 4;
                         if self.ly > 153 {
                             self.ly = 0;
                             self.window_line = 0;
@@ -262,14 +280,23 @@ impl Ppu {
                 }
             }
             // Track the mode transition so the STAT-visible mode can lag it.
+            // On the first line after enable there is no lag: the visible mode
+            // (and the OAM/VRAM locks) flip together with the internal mode.
             if self.mode != mode_before {
                 self.prev_mode = mode_before;
-                self.transition_age = 0;
+                self.transition_age = if self.lcd_on_line0 { 4 } else { 0 };
             } else {
                 self.transition_age = self.transition_age.saturating_add(1);
             }
             // The LY==LYC comparison clock runs only while the LCD is on.
-            self.lyc_match = self.ly == self.lyc;
+            // After LY changes, the match latch reads 0 for the first 4 dots
+            // of the line before the new comparison is latched.
+            if self.lyc_blank > 0 {
+                self.lyc_blank -= 1;
+                self.lyc_match = false;
+            } else {
+                self.lyc_match = self.ly == self.lyc;
+            }
             self.update_stat_line(&mut requested);
         }
         requested
@@ -548,12 +575,8 @@ impl Ppu {
 
     // --- CPU-visible memory & registers ------------------------------------
 
-    fn can_access_vram(&self) -> bool {
-        !self.lcd_enabled() || self.mode != PpuMode::Drawing
-    }
-
-    /// The mode as software observes it: the STAT bits and OAM/VRAM locking
-    /// lag the internal mode transition by a few dots on hardware.
+    /// The mode as software observes it: the STAT bits and the lock-release
+    /// edges lag the internal mode transition by 4 dots on hardware.
     fn visible_mode(&self) -> PpuMode {
         if self.transition_age < 4 {
             self.prev_mode
@@ -562,13 +585,37 @@ impl Ppu {
         }
     }
 
-    fn can_access_oam(&self) -> bool {
-        let mode = self.visible_mode();
-        !self.lcd_enabled() || (mode != PpuMode::OamScan && mode != PpuMode::Drawing)
+    // OAM/VRAM locking is asymmetric around the lagged (visible) mode
+    // (calibrated dot-by-dot by mooneye `lcdon_timing` / `lcdon_write_timing`):
+    //   - reads lock as soon as the *internal* mode needs the bus (scan/fetch
+    //     start) and unlock only with the *visible* transition;
+    //   - writes are gated by the visible mode alone, so they still land
+    //     during the first 4 dots of a line and of internal mode 3 (the
+    //     mode-2→3 handoff write window), and stay blocked to the visible end.
+
+    fn can_read_vram(&self) -> bool {
+        !self.lcd_enabled()
+            || (self.mode != PpuMode::Drawing && self.visible_mode() != PpuMode::Drawing)
+    }
+
+    fn can_write_vram(&self) -> bool {
+        !self.lcd_enabled() || self.visible_mode() != PpuMode::Drawing
+    }
+
+    fn can_read_oam(&self) -> bool {
+        let locks = |m: PpuMode| m == PpuMode::OamScan || m == PpuMode::Drawing;
+        !self.lcd_enabled() || (!locks(self.mode) && !locks(self.visible_mode()))
+    }
+
+    fn can_write_oam(&self) -> bool {
+        let vis = self.visible_mode();
+        !self.lcd_enabled()
+            || !((self.mode == PpuMode::OamScan && vis == PpuMode::OamScan)
+                || vis == PpuMode::Drawing)
     }
 
     pub fn read_vram(&self, addr: u16) -> u8 {
-        if self.can_access_vram() {
+        if self.can_read_vram() {
             self.vram[(addr & 0x1FFF) as usize]
         } else {
             0xFF
@@ -576,13 +623,13 @@ impl Ppu {
     }
 
     pub fn write_vram(&mut self, addr: u16, value: u8) {
-        if self.can_access_vram() {
+        if self.can_write_vram() {
             self.vram[(addr & 0x1FFF) as usize] = value;
         }
     }
 
     pub fn read_oam(&self, addr: u16) -> u8 {
-        if self.can_access_oam() {
+        if self.can_read_oam() {
             self.oam[(addr - 0xFE00) as usize]
         } else {
             0xFF
@@ -590,7 +637,7 @@ impl Ppu {
     }
 
     pub fn write_oam(&mut self, addr: u16, value: u8) {
-        if self.can_access_oam() {
+        if self.can_write_oam() {
             self.oam[(addr - 0xFE00) as usize] = value;
         }
     }
@@ -635,6 +682,8 @@ impl Ppu {
                     self.dots = 0;
                     self.mode = PpuMode::HBlank;
                     self.window_line = 0;
+                    self.lcd_on_line0 = false;
+                    self.lyc_blank = 0;
                     // The coincidence latch is retained; with the scan stopped
                     // only it can hold the STAT line up, so a genuine rising edge
                     // is seen on re-enable (the mode sources are inactive).
@@ -649,6 +698,7 @@ impl Ppu {
                     self.transition_age = 0xFF;
                     self.lcd_on_line0 = true;
                     self.window_line = 0;
+                    self.lyc_blank = 0;
                     self.lyc_match = self.ly == self.lyc;
                     // If restarting the comparison raises the STAT line, fire the
                     // interrupt now (before the next instruction), matching the

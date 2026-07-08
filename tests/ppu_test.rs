@@ -14,7 +14,9 @@ fn enabled_ppu() -> Ppu {
 #[test]
 fn ppu_oam_scan_lasts_80_dots() {
     let mut ppu = enabled_ppu();
-    ppu.tick(200); ppu.tick(200); ppu.tick(56);
+    // Skip the special first line after enable: no OAM scan and only
+    // 452 dots (the PPU starts late). Line 1 is a normal line.
+    ppu.tick(200); ppu.tick(200); ppu.tick(52);
     assert_eq!(ppu.ly, 1);
     assert_eq!(ppu.get_mode(), PpuMode::OamScan);
 

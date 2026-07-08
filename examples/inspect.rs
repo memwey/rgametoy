@@ -85,6 +85,25 @@ fn main() {
                 c.step();
             }
         }
+        "dumpat" => {
+            // Break at a PC (repeatedly) and hex-dump a memory range each hit.
+            // Usage: dumpat <PChex> <addrhex> <len> [count]
+            let pc = hex(&args[3]);
+            let addr = hex(&args[4]);
+            let len: u16 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(16);
+            let count: u32 = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(1);
+            let mut c = load();
+            for _ in 0..count {
+                if !c.run_until(50_000_000, |c| c.get_cpu().get_pc() == pc) {
+                    break;
+                }
+                let bytes: Vec<String> = (0..len)
+                    .map(|i| format!("{:02X}", c.peek(addr.wrapping_add(i))))
+                    .collect();
+                println!("PC={:04X} {:04X}: {}", pc, addr, bytes.join(" "));
+                c.step(); // move off the breakpoint
+            }
+        }
         "oamat" => {
             // Break at a PC (optionally when LY matches), then dump OAM.
             let pc = hex(&args[3]);

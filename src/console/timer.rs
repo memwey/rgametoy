@@ -7,6 +7,9 @@
 pub struct Timer {
     /// 16-bit system counter; DIV (0xFF04) is its upper byte.
     counter: u16,
+    /// Counter value before the most recent T-cycle increment — the state a
+    /// register store landing on T3 (before that increment) observes.
+    prev_counter: u16,
     tima: u8, // 0xFF05
     tma: u8,  // 0xFF06
     tac: u8,  // 0xFF07 (lower 3 bits)
@@ -25,6 +28,7 @@ impl Timer {
     pub fn new() -> Timer {
         Timer {
             counter: 0,
+            prev_counter: 0,
             tima: 0,
             tma: 0,
             tac: 0,
@@ -50,6 +54,7 @@ impl Timer {
                     interrupt = true;
                 }
             }
+            self.prev_counter = self.counter;
             self.counter = self.counter.wrapping_add(1);
             self.update_edge();
         }
@@ -144,7 +149,7 @@ impl Timer {
                 // write position (which is T4; moving it regresses the
                 // control-flow write-timing tests).
                 let new_tac = value & 0x07;
-                let before = self.counter.wrapping_sub(1);
+                let before = self.prev_counter;
                 // Edge already counted by this M-cycle's T4 under the old TAC.
                 let t4_old = Self::input_with(self.tac, before)
                     && !Self::input_with(self.tac, self.counter);
