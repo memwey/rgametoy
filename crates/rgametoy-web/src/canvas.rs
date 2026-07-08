@@ -33,7 +33,7 @@ pub fn get_canvas(doc: &Document) -> Result<(HtmlCanvasElement, CanvasRenderingC
 }
 
 /// Push the contents of `rgba_buf` (a `SCREEN_W * SCREEN_H * 4` RGBA buffer)
-/// to the canvas. The ImageData is created fresh each frame; the 23 KB
+/// to the canvas. The ImageData is created fresh each frame; the ~90 KB
 /// allocation is small enough that pool-reuse would be premature optimisation.
 pub fn present(ctx: &CanvasRenderingContext2d, rgba_buf: &[u8]) -> Result<(), JsValue> {
     let clamped = Clamped(rgba_buf);

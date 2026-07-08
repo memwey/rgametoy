@@ -81,7 +81,7 @@ pub fn shade_to_rgba(shades: &[u8], table: [(u8, u8, u8, u8); 4], out: &mut [u8]
     debug_assert_eq!(shades.len() * 4, out.len());
     for (i, &s) in shades.iter().enumerate() {
         let (r, g, b, a) = table[(s & 0x03) as usize];
-        out[i * 4 + 0] = r;
+        out[i * 4] = r;
         out[i * 4 + 1] = g;
         out[i * 4 + 2] = b;
         out[i * 4 + 3] = a;

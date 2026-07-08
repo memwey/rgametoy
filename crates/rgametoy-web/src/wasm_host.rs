@@ -31,6 +31,23 @@ const TURBO_FRAMES_PER_TICK: u32 = 4;
 /// a tab crash loses at most ~2 s of progress.
 const AUTOSAVE_DEBOUNCE: u64 = 120;
 
+/// One DMG frame in milliseconds (4.194304 MHz / 70224 dots ≈ 59.7275 Hz).
+/// The rAF loop paces emulation against this, not the display refresh, so a
+/// 120 Hz panel doesn't run the game 2×.
+const DMG_FRAME_MS: f64 = 70224.0 / 4_194_304.0 * 1000.0;
+
+/// Cap on the real time a single tick may consume, so a long stall (e.g. a
+/// backgrounded tab) is absorbed instead of triggering a catch-up avalanche.
+const MAX_CATCHUP_MS: f64 = 100.0;
+
+/// Hard cap on emulated frames run per rAF tick (belt-and-braces with the
+/// catch-up clamp above).
+const MAX_FRAMES_PER_TICK: u32 = 4;
+
+/// The requestAnimationFrame closure slot: kept in an `Rc<RefCell>` so the
+/// closure can re-arm itself each frame without being dropped.
+type RafSlot = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
 /// All mutable state lives in here. The rAF closure (and, in Phase 5, the
 /// audio closure) each hold a clone of the surrounding `Rc<RefCell<Inner>>`
 /// so they can call `borrow_mut()` and reach every field.
@@ -83,11 +100,16 @@ pub struct Inner {
     /// out to `#fps` once a wall-clock second has passed.
     pub fps_count: u32,
     pub fps_last_ms: f64,
+    /// Real-time frame pacing (rAF-driven path only): accumulated real
+    /// milliseconds not yet spent on emulated frames, and the previous tick's
+    /// timestamp. Decouples the emulated ~59.7 Hz from the display refresh.
+    pub frame_accum_ms: f64,
+    pub last_tick_ms: f64,
 
     // Closures that must outlive any single JS callback. They go in `Inner`
     // (rather than in `WasmHost`) so a future `Rc<RefCell<Inner>>` clone
     // dropped elsewhere doesn't end the callback's lifetime early.
-    pub raf_slot: Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+    pub raf_slot: RafSlot,
     pub load_button_closure: Option<Closure<dyn FnMut()>>,
     pub rom_change_closure: Option<Closure<dyn FnMut(Event)>>,
     pub rom_reader_closure: Option<Closure<dyn FnMut(Event)>>,
@@ -132,6 +154,8 @@ impl Inner {
             frame_idx: 0,
             fps_count: 0,
             fps_last_ms: 0.0,
+            frame_accum_ms: 0.0,
+            last_tick_ms: 0.0,
             raf_slot: Rc::new(RefCell::new(None)),
             load_button_closure: None,
             rom_change_closure: None,
@@ -362,11 +386,32 @@ impl Inner {
 
         self.apply_input();
         if !self.paused && self.has_rom && !self.audio_enabled {
-            let turbo = self.keys_down.contains("Tab");
-            let n = if turbo { TURBO_FRAMES_PER_TICK } else { 1 };
-            for _ in 0..n {
-                self.console.run_frame();
+            let now = js_sys::Date::now();
+            if self.keys_down.contains("Tab") {
+                // Fast-forward: a fixed burst per tick. Reset the accumulator
+                // so releasing turbo doesn't leave a backlog to replay.
+                for _ in 0..TURBO_FRAMES_PER_TICK {
+                    self.console.run_frame();
+                }
+                self.frame_accum_ms = 0.0;
+            } else {
+                // Pace against real elapsed time, not the display refresh: a
+                // fixed one-frame-per-rAF would run 2× on a 120 Hz panel. Run
+                // as many ~59.7 Hz frames as fit the elapsed time, capped.
+                let dt = if self.last_tick_ms == 0.0 {
+                    DMG_FRAME_MS
+                } else {
+                    (now - self.last_tick_ms).min(MAX_CATCHUP_MS)
+                };
+                self.frame_accum_ms += dt;
+                let mut ran = 0;
+                while self.frame_accum_ms >= DMG_FRAME_MS && ran < MAX_FRAMES_PER_TICK {
+                    self.console.run_frame();
+                    self.frame_accum_ms -= DMG_FRAME_MS;
+                    ran += 1;
+                }
             }
+            self.last_tick_ms = now;
         }
         let fb = self.console.framebuffer();
         let table = rgba_table(self.palette_idx);
@@ -377,7 +422,7 @@ impl Inner {
         // battery RAM to IDB. We don't gate on `ram_dirty` because the
         // cartridge `ram_dirty` flag is cleared on the first read; the
         // whole point of persistence is to capture a fresh write.
-        if self.has_rom && self.frame_idx % AUTOSAVE_DEBOUNCE == 0 {
+        if self.has_rom && self.frame_idx.is_multiple_of(AUTOSAVE_DEBOUNCE) {
             self.persist_record();
         }
         self.frame_idx = self.frame_idx.wrapping_add(1);
@@ -664,7 +709,7 @@ impl WasmHost {
     /// by one frame and blits the framebuffer to the canvas.
     fn start_render_loop(&self) -> Result<(), JsValue> {
         let inner = self.inner.clone();
-        let raf_slot: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+        let raf_slot: RafSlot = Rc::new(RefCell::new(None));
         let slot_for_cb = raf_slot.clone();
         *raf_slot.borrow_mut() = Some(Closure::wrap(Box::new(move || {
             // Drain any queued meta actions before stepping, so a save

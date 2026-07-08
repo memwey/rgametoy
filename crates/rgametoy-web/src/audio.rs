@@ -90,68 +90,59 @@ pub fn enable(
     node.connect_with_audio_node(&ctx.destination())?;
 
     let host: Rc<RefCell<crate::wasm_host::Inner>> = inner.clone();
+    // The APU's output rate is fixed, so read it once and build a *persistent*
+    // resampler: recreating it per callback would reset its phase (`pos`/`prev`)
+    // and click at every buffer boundary. The output buffer is reused too.
+    let source_rate = host.borrow().console.audio_output_rate().max(1);
+    let mut resampler = Resampler::new(source_rate, device_rate.max(1));
+    let mut resampled: Vec<f32> = Vec::new();
     let closure = Closure::wrap(Box::new(move |ev: Event| {
-        // ScriptProcessorNode's onaudioprocess is the only place where
-        // the runtime asks us to produce samples. Take this opportunity
-        // to advance the emulator and produce audio for *this* batch.
-        let ev: AudioProcessingEvent = match ev.unchecked_into() {
-            e => e,
-        };
+        // ScriptProcessorNode's onaudioprocess is the only place where the
+        // runtime asks us to produce samples. Advance the emulator and produce
+        // audio for *this* batch.
+        let ev: AudioProcessingEvent = ev.unchecked_into();
         let output = match ev.output_buffer() {
             Ok(b) => b,
             Err(_) => return,
         };
-
-        let mut host = host.borrow_mut();
-        let source_rate = host.console.audio_output_rate();
         if source_rate == 0 || device_rate == 0 {
             return;
         }
 
-        // Output length in frames. `audio` callback asks for `output.length()`
-        // frames at the device rate; we need to produce that many samples
-        // worth of APU output (resampled).
+        let mut host = host.borrow_mut();
+        // Output length in frames at the device rate; produce that many frames
+        // worth of (resampled) APU output.
         let out_frames = output.length() as usize;
-        // Source frames required: (out_frames * source_rate) / device_rate,
-        // rounded up so we never under-fill.
+        // Source frames required, rounded up so we never under-fill.
         let need_source_frames =
             (out_frames * source_rate as usize).div_ceil(device_rate as usize);
-        // Each source frame is one step call's worth of CPU work, but a
-        // step is one *instruction* and consumes a variable number of
-        // T-cycles. Easier: run a fixed budget of cycles proportional
-        // to the time slice.
+        // The core has no public "run N cycles" entry point, so step whole
+        // instructions until we've spent roughly this batch's cycle budget.
         let need_cycles = (need_source_frames as u64) * (4_194_304u64 / source_rate as u64);
-
-        // Drive the console forward. We use `step` (one instruction) in
-        // a loop because the core has no public "run N cycles" entry
-        // point — `run_frame` is fixed to 70224 T-cycles. To match the
-        // requested time slice we step until we've spent enough cycles.
         let mut spent = 0u64;
         while spent < need_cycles {
             spent += host.console.step() as u64;
         }
         let apu_samples = host.console.take_audio_samples();
-        // `apu_samples` is interleaved stereo f32 at `source_rate`.
-        // Cap to keep the resampler bounded.
+        // Interleaved stereo f32 at `source_rate`; cap to keep it bounded.
         let truncated = if apu_samples.len() > RESAMPLE_BUF_CAP {
             &apu_samples[apu_samples.len() - RESAMPLE_BUF_CAP..]
         } else {
             &apu_samples[..]
         };
 
-        // Resample into the output buffer.
-        let mut resampled: Vec<f32> = Vec::with_capacity(out_frames * 2);
-        let mut r = Resampler::new(source_rate, device_rate);
-        r.process(truncated, &mut resampled);
-        // Pad / truncate to exactly out_frames * 2 (interleaved stereo).
+        // Resample through the persistent resampler (continuous phase across
+        // callbacks), reusing the output buffer, then pad/truncate to exactly
+        // out_frames * 2 interleaved.
+        resampled.clear();
+        resampler.process(truncated, &mut resampled);
         if resampled.len() < out_frames * 2 {
             resampled.resize(out_frames * 2, 0.0);
         } else if resampled.len() > out_frames * 2 {
             resampled.truncate(out_frames * 2);
         }
 
-        // Write to the AudioBuffer's two channels. `copyToChannel` expects
-        // a non-interleaved slice, so we deinterleave on the fly.
+        // `copyToChannel` wants a non-interleaved slice, so deinterleave.
         let mut left: Vec<f32> = resampled.iter().step_by(2).copied().collect();
         let mut right: Vec<f32> = resampled.iter().skip(1).step_by(2).copied().collect();
         if left.len() < out_frames {
@@ -160,8 +151,8 @@ pub fn enable(
         if right.len() < out_frames {
             right.resize(out_frames, 0.0);
         }
-        let _ = output.copy_to_channel_with_start_in_channel(&mut left, 0, 0);
-        let _ = output.copy_to_channel_with_start_in_channel(&mut right, 1, 0);
+        let _ = output.copy_to_channel_with_start_in_channel(&left, 0, 0);
+        let _ = output.copy_to_channel_with_start_in_channel(&right, 1, 0);
     }) as Box<dyn FnMut(Event)>);
 
     // `set_onaudioprocess` is a property setter; the closure-as-property

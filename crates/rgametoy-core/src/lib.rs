@@ -169,10 +169,10 @@ impl Console {
         self.clone_from(&state.0);
     }
 
-    /// Serialize the entire machine to a portable byte blob (magic + version
-    /// + CRC32 + per-module body). This is what gets handed to a frontend for
-    /// persistence; the in-memory `SaveState` is only useful within one
-    /// process. The on-disk layout is documented in `state.rs`.
+    /// Serialize the entire machine to a portable byte blob (magic, version,
+    /// a CRC32, then each module's state). This is what gets handed to a
+    /// frontend for persistence; the in-memory `SaveState` is only useful
+    /// within one process. The on-disk layout is documented in `state.rs`.
     pub fn save_state_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&SAVE_STATE_MAGIC);
@@ -200,7 +200,7 @@ impl Console {
         if bytes.len() < SAVE_STATE_MAGIC.len() + 1 + 4 {
             return Err(SaveStateError::Truncated);
         }
-        if &bytes[0..4] != SAVE_STATE_MAGIC {
+        if bytes[0..4] != SAVE_STATE_MAGIC {
             return Err(SaveStateError::BadMagic);
         }
         let version = bytes[4];
@@ -212,10 +212,16 @@ impl Console {
         if crc32(payload) != crc {
             return Err(SaveStateError::CrcMismatch);
         }
+        // Parse into a clone and commit only on success, so a mid-parse error
+        // (e.g. an unknown cartridge kind when the wrong ROM is loaded) never
+        // leaves the live machine half-overwritten. The clone is cheap — the
+        // read-only ROM is shared via `Arc`, not copied.
+        let mut next = self.clone();
         let mut r = Reader::new(payload);
-        self.total_cycles = r.read_u64_le()?;
-        self.cpu.read_state(&mut r)?;
-        self.bus.read_state(&mut r)?;
+        next.total_cycles = r.read_u64_le()?;
+        next.cpu.read_state(&mut r)?;
+        next.bus.read_state(&mut r)?;
+        *self = next;
         Ok(())
     }
 

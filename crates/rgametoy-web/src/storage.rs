@@ -22,6 +22,12 @@ use web_sys::{
     IdbOpenDbRequest, IdbRequest,
 };
 
+/// A one-shot callback shared into a JS event closure via `Rc<RefCell<Option>>`
+/// so the closure can `take()` and call it exactly once.
+type SharedOnce = Rc<RefCell<Option<Box<dyn FnOnce()>>>>;
+/// Same, for the "read a record" result callback.
+type SharedResultOnce = Rc<RefCell<Option<Box<dyn FnOnce(Option<SaveRecord>)>>>>;
+
 /// Database / object-store names. Bumping the version is what triggers
 /// `onupgradeneeded`; we only have one store at v1, so no migrations yet.
 const DB_NAME: &str = "rgametoy";
@@ -113,7 +119,7 @@ pub fn init_async(
     upgrade_closure.forget();
 
     let slot_for_error: Rc<RefCell<Option<IdbDatabase>>> = slot;
-    let on_unavailable_cell: Rc<RefCell<Option<Box<dyn FnOnce()>>>> =
+    let on_unavailable_cell: SharedOnce =
         Rc::new(RefCell::new(Some(Box::new(on_unavailable))));
     let on_unavailable_for_cb = on_unavailable_cell.clone();
     let error_closure = Closure::wrap(Box::new(move |_ev: Event| {
@@ -161,7 +167,7 @@ pub fn get_record_async(
             return;
         }
     };
-    let on_result_cell: Rc<RefCell<Option<Box<dyn FnOnce(Option<SaveRecord>)>>>> =
+    let on_result_cell: SharedResultOnce =
         Rc::new(RefCell::new(Some(Box::new(on_result))));
     let cb_cell = on_result_cell.clone();
     let closure = Closure::wrap(Box::new(move |ev: Event| {
@@ -179,7 +185,7 @@ pub fn get_record_async(
             f(record);
         }
     }) as Box<dyn FnMut(Event)>);
-    let _ = request.set_onsuccess(Some(closure.as_ref().unchecked_ref()));
+    request.set_onsuccess(Some(closure.as_ref().unchecked_ref()));
     closure.forget();
 }
 

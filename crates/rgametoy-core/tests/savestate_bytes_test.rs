@@ -42,17 +42,18 @@ fn save_state_bytes_roundtrips_a_running_machine() {
     assert_eq!(&blob[0..4], &SAVE_STATE_MAGIC);
     assert_eq!(blob[4], SAVE_STATE_VERSION);
 
-    // Mutate the machine further so loading actually has something to do.
-    for _ in 0..50 {
-        a.run_frame();
-    }
-
+    // Restore into a fresh machine and re-serialise: the definitive round-trip
+    // check. Every field that was written must read back and re-write
+    // identically, so a dropped, reordered or defaulted-on-load field shows up
+    // as a byte diff here — a framebuffer compare would miss it for a ROM that
+    // renders nothing.
     let mut b = new_console();
     b.load_state_bytes(&blob).expect("load_state_bytes should succeed");
-
-    // Deterministic surface: the visible framebuffer and the cycle counter
-    // must match between the snapshot and the post-load machine.
-    assert_eq!(a.framebuffer(), b.framebuffer());
+    assert_eq!(
+        b.save_state_bytes(),
+        blob,
+        "re-serialised state differs from the snapshot => a field does not round-trip"
+    );
 }
 
 #[test]
@@ -74,11 +75,21 @@ fn load_state_bytes_rejects_truncated_body() {
 #[test]
 fn load_state_bytes_rejects_corrupt_crc() {
     let mut c = new_console();
-    let mut blob = c.save_state_bytes();
+    for _ in 0..5 {
+        c.run_frame();
+    }
+    let good = c.save_state_bytes();
+    let mut blob = good.clone();
     // Flip a byte in the middle of the body.
     let mid = blob.len() / 2;
     blob[mid] ^= 0x01;
     assert!(c.load_state_bytes(&blob).is_err());
+    // A rejected load must leave the live machine untouched (atomic apply).
+    assert_eq!(
+        c.save_state_bytes(),
+        good,
+        "a rejected load mutated the live machine"
+    );
 }
 
 #[test]
@@ -95,9 +106,17 @@ fn save_state_bytes_keeps_machines_in_lockstep() {
     let mut b = new_console();
     b.load_state_bytes(&blob).expect("load_state_bytes should succeed");
 
-    for _ in 0..30 {
+    // Compare the *whole* serialised machine each frame (not just the pixels),
+    // so a restore that got any internal state wrong — cycle counter, APU
+    // sequencer, PPU dot, timer — diverges immediately even for a ROM that
+    // never draws anything.
+    for i in 0..30 {
         a.run_frame();
         b.run_frame();
-        assert_eq!(a.framebuffer(), b.framebuffer());
+        assert_eq!(
+            a.save_state_bytes(),
+            b.save_state_bytes(),
+            "machines diverged at frame {i}"
+        );
     }
 }

@@ -85,15 +85,15 @@ mod tests {
     #[test]
     fn arrow_keys_clear_directions() {
         let s = from_keydown("ArrowRight");
-        assert_eq!(s.buttons, 0xFF & !RIGHT);
+        assert_eq!(s.buttons, !RIGHT);
         assert!(!s.turbo);
         assert!(!s.save);
     }
 
     #[test]
     fn zxa_clear_action_buttons() {
-        assert_eq!(from_keydown("KeyZ").buttons, 0xFF & !A);
-        assert_eq!(from_keydown("KeyX").buttons, 0xFF & !B);
+        assert_eq!(from_keydown("KeyZ").buttons, !A);
+        assert_eq!(from_keydown("KeyX").buttons, !B);
     }
 
     #[test]
