@@ -13,7 +13,8 @@ cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍
 ```
 
 按键映射:方向键 = 方向键,`Z` = A,`X` = B,`Enter` = Start,`Backspace` = Select,
-**按住 `Tab` = 快进**,`F5` = 即时存档 / `F7` = 即时读档,`F2` = 截图,`Esc` = 退出。
+**按住 `Tab` = 快进**,`F5` = 即时存档 / `F7` = 即时读档,`F2` = 截图,`F3` = 切换配色,
+`Esc` = 退出。窗口标题会实时显示帧率、速度倍率和当前配色。
 
 快进以 CPU 时钟为基准:每个模拟帧的真实时间预算 = `一帧时间 / 倍率`,呈现仍每帧一次;
 松开 `Tab` 立即回原速。快进期间音频静音(避免过量采样)。
@@ -30,6 +31,10 @@ cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍
 **截图**:`F2` 把当前帧按原生 160×144 存成 24-bit BMP(像素精确,适合调试),存好后在终端
 打印路径。编码器与无头的 `--example screenshot` 共用一份(`src/emulator/screenshot.rs`),
 窗口与截图配色一致。
+
+**配色**:核心只输出 0–3 四级灰度,把灰度映射成颜色是纯前端的选择
+(`src/emulator/palette.rs`)。`F3` 在几套内置配色间循环——经典 DMG 绿,以及给四级灰度上色
+的变体(grayscale、amber、ocean、berry)。截图使用当前生效的配色。默认是 DMG 绿。
 
 支持的卡带:无 MBC (32KB)、MBC1、MBC3(不含 RTC)、MBC5,含外部 RAM 与 bank 切换。
 带电池的卡带把外部 RAM 存档持久化到 `saves/<卡带文件名>-<内容哈希>.sav`——文件名可读、
@@ -53,7 +58,7 @@ crate 按硬件 / 宿主分层(`src/lib.rs`):`console` 是被模拟的机器,`em
 ```text
   emulator/   宿主前端 —— 窗口、输入、音频、文件(minifb / cpal)
   ─────────   main → Emulator::run(): 读输入 → run_frame → 呈现 → 按帧节流
-              display · input · audio · screenshot · paths
+              display · input · audio · screenshot · palette · paths
                  │  run_frame() / framebuffer()          ▲  set_buttons()
                  ▼                                        │
   console/    被模拟的 DMG —— 确定性,无宿主 I/O

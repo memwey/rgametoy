@@ -28,3 +28,9 @@ target
 # Emulator data dir (default base = cwd): battery saves + F2 screenshots
 /saves/
 /screenshots/
+
+# Game ROMs / save data — never commit copyrighted ROMs into the repo
+*.gb
+*.gbc
+*.sav
+*.bmp

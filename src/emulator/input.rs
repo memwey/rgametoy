@@ -37,6 +37,8 @@ const SAVE_KEY: Key = Key::F5;
 const LOAD_KEY: Key = Key::F7;
 /// Host key that saves a screenshot.
 const SCREENSHOT_KEY: Key = Key::F2;
+/// Host key that cycles the display palette.
+const PALETTE_KEY: Key = Key::F3;
 
 /// A frame's worth of host input, decoded into console-facing values.
 pub struct InputState {
@@ -49,6 +51,8 @@ pub struct InputState {
     pub save: bool,
     pub load: bool,
     pub screenshot: bool,
+    /// Whether the palette-cycle key is down this frame (edge-detected too).
+    pub palette_cycle: bool,
 }
 
 /// Read the current host keyboard and map it to console input.
@@ -65,5 +69,6 @@ pub fn poll(display: &Display) -> InputState {
         save: display.is_key_down(SAVE_KEY),
         load: display.is_key_down(LOAD_KEY),
         screenshot: display.is_key_down(SCREENSHOT_KEY),
+        palette_cycle: display.is_key_down(PALETTE_KEY),
     }
 }

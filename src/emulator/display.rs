@@ -1,5 +1,5 @@
 use crate::console::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
-use crate::emulator::screenshot::DMG_PALETTE;
+use crate::emulator::palette;
 use minifb::{Key, Scale, Window, WindowOptions};
 
 /// Integer upscale factor. Each Game Boy pixel becomes a SCALE×SCALE block, so
@@ -9,24 +9,15 @@ pub const SCALE: usize = 4;
 const WINDOW_WIDTH: usize = SCREEN_WIDTH * SCALE;
 const WINDOW_HEIGHT: usize = SCREEN_HEIGHT * SCALE;
 
-/// The window's opaque-ARGB palette, derived from the shared [`DMG_PALETTE`] so
-/// the window and saved screenshots always use the same colours.
-const fn argb(rgb: (u8, u8, u8)) -> u32 {
-    0xFF00_0000 | ((rgb.0 as u32) << 16) | ((rgb.1 as u32) << 8) | rgb.2 as u32
-}
-const PALETTE: [u32; 4] = [
-    argb(DMG_PALETTE[0]),
-    argb(DMG_PALETTE[1]),
-    argb(DMG_PALETTE[2]),
-    argb(DMG_PALETTE[3]),
-];
-
 /// The host window. Owns presentation only — the integer upscale and the
 /// shade→colour mapping live here; raw key state is exposed for the input
-/// module to map.
+/// module to map. The active palette (see [`palette`]) can be cycled at runtime.
 pub struct Display {
     window: Window,
     buffer: Vec<u32>,
+    /// Index into [`palette::PALETTES`], and its precomputed opaque-ARGB form.
+    palette_idx: usize,
+    argb: [u32; 4],
 }
 
 impl Display {
@@ -40,12 +31,15 @@ impl Display {
             ..WindowOptions::default()
         };
 
-        let window = Window::new("rgametoy - ESC to exit", WINDOW_WIDTH, WINDOW_HEIGHT, options)
+        let window = Window::new("rgametoy", WINDOW_WIDTH, WINDOW_HEIGHT, options)
             .unwrap_or_else(|e| panic!("{}", e));
 
+        let argb = palette::to_argb(&palette::PALETTES[0].1);
         Display {
             window,
-            buffer: vec![PALETTE[0]; WINDOW_WIDTH * WINDOW_HEIGHT],
+            buffer: vec![argb[0]; WINDOW_WIDTH * WINDOW_HEIGHT],
+            palette_idx: 0,
+            argb,
         }
     }
 
@@ -53,7 +47,7 @@ impl Display {
     pub fn present(&mut self, framebuffer: &[u8]) {
         for y in 0..SCREEN_HEIGHT {
             for x in 0..SCREEN_WIDTH {
-                let color = PALETTE[(framebuffer[y * SCREEN_WIDTH + x] & 0x03) as usize];
+                let color = self.argb[(framebuffer[y * SCREEN_WIDTH + x] & 0x03) as usize];
                 for dy in 0..SCALE {
                     let base = (y * SCALE + dy) * WINDOW_WIDTH + x * SCALE;
                     for dx in 0..SCALE {
@@ -65,6 +59,28 @@ impl Display {
         self.window
             .update_with_buffer(&self.buffer, WINDOW_WIDTH, WINDOW_HEIGHT)
             .unwrap();
+    }
+
+    /// Advance to the next palette; returns its name.
+    pub fn cycle_palette(&mut self) -> &'static str {
+        self.palette_idx = (self.palette_idx + 1) % palette::PALETTES.len();
+        self.argb = palette::to_argb(&palette::PALETTES[self.palette_idx].1);
+        palette::PALETTES[self.palette_idx].0
+    }
+
+    /// The active palette's name and RGB colours (so a screenshot can match the
+    /// window).
+    pub fn palette_name(&self) -> &'static str {
+        palette::PALETTES[self.palette_idx].0
+    }
+
+    pub fn palette(&self) -> &'static palette::Palette {
+        &palette::PALETTES[self.palette_idx].1
+    }
+
+    /// Set the window title (used to show the fps / speed / palette).
+    pub fn set_title(&mut self, title: &str) {
+        self.window.set_title(title);
     }
 
     pub fn is_open(&self) -> bool {
