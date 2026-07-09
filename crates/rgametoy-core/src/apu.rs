@@ -1031,7 +1031,13 @@ impl Apu {
         self.hp_factor = f32::from_bits(r.read_u32_le()?);
         self.hp_cap_l = f32::from_bits(r.read_u32_le()?);
         self.hp_cap_r = f32::from_bits(r.read_u32_le()?);
+        // The buffer never legitimately exceeds BUFFER_CAP. Reject a larger
+        // count before it can overflow `n * 4` (usize is 32-bit on wasm32) or
+        // force a giant `reserve`.
         let n = r.read_u32_le()? as usize;
+        if n > BUFFER_CAP {
+            return Err(SaveStateError::Corrupt);
+        }
         let bytes = r.read_exact(n * 4)?;
         self.buffer.clear();
         self.buffer.reserve(n);

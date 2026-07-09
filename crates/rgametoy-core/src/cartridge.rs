@@ -347,7 +347,10 @@ impl Cartridge {
             // Truncate quietly — over-long snapshots just mean the ROM is
             // smaller than the one that produced the state.
         }
-        self.ram_dirty = false;
+        // The just-loaded RAM may differ from what's persisted (.sav / IDB), so
+        // mark it dirty rather than clean — otherwise a snapshot taken with
+        // unsaved battery RAM would never get flushed after loading, losing it.
+        self.ram_dirty = true;
         Ok(())
     }
 }

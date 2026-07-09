@@ -121,3 +121,47 @@ fn save_state_bytes_keeps_machines_in_lockstep() {
         );
     }
 }
+
+/// Loading a state must mark battery RAM dirty, not clean: the snapshot's RAM
+/// may differ from what's persisted (.sav / IDB), so the frontend has to flush
+/// it. Clearing the flag on load would drop a snapshot's unsaved battery RAM.
+#[test]
+fn loading_a_state_marks_ram_dirty_for_flushing() {
+    let mut a = new_console();
+    for _ in 0..3 {
+        a.run_frame();
+    }
+    let blob = a.save_state_bytes();
+
+    let mut b = new_console();
+    b.cartridge_mut().clear_ram_dirty();
+    assert!(!b.cartridge().ram_dirty(), "clean before load");
+    b.load_state_bytes(&blob).expect("load");
+    assert!(
+        b.cartridge().ram_dirty(),
+        "load must mark RAM dirty so the frontend persists it"
+    );
+}
+
+/// A snapshot captured while `frame_ready` was set (e.g. taken mid-frame via
+/// `step`) must not make the first `run_frame` after loading break immediately
+/// and skip a frame — the flag is transient and must load as false.
+#[test]
+fn loaded_state_runs_a_full_first_frame_even_if_snapshot_was_frame_ready() {
+    let mut a = new_console();
+    // Step (not run_frame) past a frame boundary so `frame_ready` is set and
+    // never consumed — exactly the state a mid-frame snapshot could capture.
+    while a.total_cycles() < 70_224 {
+        a.step();
+    }
+    let blob = a.save_state_bytes();
+
+    let mut b = new_console();
+    b.load_state_bytes(&blob).expect("load");
+    let before = b.total_cycles();
+    b.run_frame();
+    assert!(
+        b.total_cycles() - before > 60_000,
+        "first frame after a frame-ready snapshot must still run a full frame"
+    );
+}

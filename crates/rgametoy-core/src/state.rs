@@ -36,6 +36,11 @@ pub enum SaveStateError {
     /// The cartridge kind tag is one we don't implement. Refuse rather than
     /// silently load an MBC1 emulation of e.g. an MBC2 game.
     UnknownCartridgeKind(u8),
+    /// A length field held a value larger than the machine could ever produce
+    /// (e.g. an APU sample count exceeding the buffer cap). Refuse rather than
+    /// trust it — a crafted blob could otherwise overflow a size calc or force
+    /// a huge allocation.
+    Corrupt,
 }
 
 impl fmt::Display for SaveStateError {
@@ -50,6 +55,7 @@ impl fmt::Display for SaveStateError {
             SaveStateError::UnknownCartridgeKind(k) => {
                 write!(f, "save state: unknown cartridge kind {k:#04x}")
             }
+            SaveStateError::Corrupt => f.write_str("save state: corrupt (length out of range)"),
         }
     }
 }
