@@ -126,6 +126,11 @@ impl Cpu {
             return self.cycles;
         }
 
+        // The two HALT outcomes are mutually exclusive: `halt()` sets exactly one
+        // of them (halted, or the halt-bug), and each is cleared before the other
+        // could be set.
+        debug_assert!(!(self.halted && self.halt_bug), "halted and halt_bug are exclusive");
+
         // Capture whether an `EI` from the *previous* instruction is waiting to
         // take effect. Its `IME` promotion happens after this instruction runs,
         // so a chain of `EI`s still enables interrupts after just one step.

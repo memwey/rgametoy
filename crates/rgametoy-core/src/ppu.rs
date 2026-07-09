@@ -529,8 +529,13 @@ impl Ppu {
             }
         }
 
-        // Output one pixel.
-        let bg = self.bg_fifo.pop_front().unwrap();
+        // Output one pixel. The mode-3 loop only reaches here after refilling
+        // the background FIFO (see the `bg_fifo.is_empty()` guard above), so it
+        // is never empty at this point.
+        let bg = self
+            .bg_fifo
+            .pop_front()
+            .expect("bg_fifo must be non-empty when outputting a mode-3 pixel");
         let obj = self.obj_fifo[0];
         for i in 0..7 {
             self.obj_fifo[i] = self.obj_fifo[i + 1];

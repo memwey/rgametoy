@@ -556,6 +556,7 @@ impl Apu {
     }
 
     fn step_frame_sequencer(&mut self) {
+        debug_assert!(self.frame_seq_step < 8, "frame sequencer has 8 steps");
         match self.frame_seq_step {
             0 | 4 => self.clock_length(),
             2 | 6 => {
@@ -1026,6 +1027,9 @@ impl Apu {
         self.nr51 = r.read_u8()?;
         self.frame_seq_counter = r.read_u32_le()?;
         self.frame_seq_step = r.read_u8()?;
+        if self.frame_seq_step > 7 {
+            return Err(SaveStateError::Corrupt); // the sequencer only has 8 steps
+        }
         self.sample_clock = f64::from_bits(r.read_u64_le()?);
         self.cycles_per_sample = f64::from_bits(r.read_u64_le()?);
         self.hp_factor = f32::from_bits(r.read_u32_le()?);
