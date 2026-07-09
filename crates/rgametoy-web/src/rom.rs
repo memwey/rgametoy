@@ -31,6 +31,24 @@ pub fn load_rom(data: Vec<u8>) -> Result<Cartridge, JsValue> {
     Ok(Cartridge::from_bytes(data))
 }
 
+/// Pull the cartridge title out of the ROM header (0x0134..0x0143, terminated
+/// by a 0 byte or end of slice). DMG titles are uppercase ASCII; the
+/// frontend shows them verbatim.
+pub fn cartridge_title(data: &[u8]) -> String {
+    let mut title = String::new();
+    for &b in &data[0x0134..0x0143.min(data.len())] {
+        if b == 0 {
+            break;
+        }
+        // Tolerate non-ASCII in the title slot (e.g. CGB flag in 0x0143) by
+        // keeping printable ASCII only.
+        if (0x20..0x7F).contains(&b) {
+            title.push(b as char);
+        }
+    }
+    title.trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_supported_type;
@@ -61,22 +79,4 @@ mod tests {
     fn rejects_a_header_too_short_to_have_a_type_byte() {
         assert!(!is_supported_type(&[0u8; 0x100]));
     }
-}
-
-/// Pull the cartridge title out of the ROM header (0x0134..0x0143, terminated
-/// by a 0 byte or end of slice). DMG titles are uppercase ASCII; the
-/// frontend shows them verbatim.
-pub fn cartridge_title(data: &[u8]) -> String {
-    let mut title = String::new();
-    for &b in &data[0x0134..0x0143.min(data.len())] {
-        if b == 0 {
-            break;
-        }
-        // Tolerate non-ASCII in the title slot (e.g. CGB flag in 0x0143) by
-        // keeping printable ASCII only.
-        if (0x20..0x7F).contains(&b) {
-            title.push(b as char);
-        }
-    }
-    title.trim().to_string()
 }

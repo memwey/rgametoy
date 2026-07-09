@@ -102,6 +102,10 @@ pub struct Inner {
     /// recompute the joypad byte each frame so autorepeat doesn't matter
     /// and a key release always takes effect immediately.
     pub keys_down: BTreeSet<String>,
+    /// Joypad byte injected by JS via `WasmHost::set_buttons` (0 = pressed).
+    /// `0xFF` (all released) when JS isn't driving input. Merged with the
+    /// keyboard each frame so touch / external controls work alongside keys.
+    pub js_buttons: u8,
     /// Edge-triggered meta keys, set in the keydown listener, cleared after
     /// the rAF loop has acted on them. Only one of each fires per press.
     pub save_pending: bool,
@@ -182,6 +186,7 @@ impl Inner {
             has_rom: false,
             title: String::from("(no ROM loaded)"),
             keys_down: BTreeSet::new(),
+            js_buttons: 0xFF,
             save_pending: false,
             load_pending: false,
             screenshot_pending: false,
@@ -403,6 +408,9 @@ impl Inner {
             state.buttons &= s.buttons;
             state.turbo |= s.turbo;
         }
+        // Merge JS-injected buttons (touch / external controls): a bit is
+        // pressed (0) if either the keyboard or JS presses it.
+        state.buttons &= self.js_buttons;
         self.console.set_buttons(state.buttons);
     }
 
@@ -618,17 +626,20 @@ impl WasmHost {
         js_sys::Uint8Array::from(inner.console.framebuffer())
     }
 
+    /// Inject a joypad byte from JS (0 = pressed) — e.g. on-screen / touch
+    /// controls. It's stored, not written straight to the console: the rAF loop
+    /// merges it with the keyboard each frame (`apply_input`), so a direct
+    /// console write would just be overwritten. `0xFF` releases all JS buttons.
     pub fn set_buttons(&self, mask: u8) {
-        // Direct console write; we don't keep a separate field any more —
-        // the rAF loop rolls the live key set straight into the console.
-        self.inner.borrow_mut().console.set_buttons(mask);
+        self.inner.borrow_mut().js_buttons = mask;
     }
 
     pub fn get_buttons(&self) -> u8 {
-        // There's no public getter on the console's P1; report the live
-        // key set so the JS-side debug overlay can show what's pressed.
+        // There's no public getter on the console's P1; report the merged
+        // keyboard + JS state (what `apply_input` feeds the console) so a
+        // JS-side debug overlay shows what's actually pressed.
         let inner = self.inner.borrow();
-        let mut buttons = 0xFFu8;
+        let mut buttons = inner.js_buttons;
         for code in &inner.keys_down {
             buttons &= from_keydown(code).buttons;
         }
@@ -877,8 +888,20 @@ fn restore_save(
     hash: String,
 ) {
     let host_rc = host_rc.clone();
+    let storage_owned = storage.clone();
     crate::storage::get_record_async(&storage.borrow(), hash.clone(), move |rec| {
-        let Ok(mut inner) = host_rc.try_borrow_mut() else { return };
+        let mut inner = match host_rc.try_borrow_mut() {
+            Ok(inner) => inner,
+            Err(_) => {
+                // Inner is momentarily borrowed. This shouldn't happen — the
+                // reply fires between event-loop tasks, when no borrow is held —
+                // but if it does, retry on the next microtask rather than
+                // silently dropping the restore (and losing the save).
+                let (h, s, hash) = (host_rc.clone(), storage_owned.clone(), hash.clone());
+                wasm_bindgen_futures::spawn_local(async move { restore_save(&h, &s, hash) });
+                return;
+            }
+        };
         if inner.rom_hash != hash {
             return; // a different ROM is loaded now — discard this late reply
         }

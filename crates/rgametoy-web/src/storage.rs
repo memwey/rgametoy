@@ -207,6 +207,27 @@ pub fn get_record_async(
     }) as Box<dyn FnMut(Event)>);
     request.set_onsuccess(Some(closure.as_ref().unchecked_ref()));
     closure.forget();
+
+    // An async failure (transaction aborted — quota, private window) fires
+    // `onerror`, not `onsuccess`, and would otherwise be a silent no-op. Log it
+    // and hand the caller `None` (whichever of success/error fires first takes
+    // the shared callback).
+    let err_cell = on_result_cell;
+    let error_closure = Closure::wrap(Box::new(move |ev: Event| {
+        let detail = ev
+            .target()
+            .and_then(|t| t.dyn_into::<IdbRequest>().ok())
+            .and_then(|r| r.error().ok().flatten());
+        match detail {
+            Some(e) => weblog::error_val("IndexedDB read failed", e.as_ref()),
+            None => weblog::error("IndexedDB read failed (transaction error/abort)"),
+        }
+        if let Some(f) = err_cell.borrow_mut().take() {
+            f(None);
+        }
+    }) as Box<dyn FnMut(Event)>);
+    request.set_onerror(Some(error_closure.as_ref().unchecked_ref()));
+    error_closure.forget();
 }
 
 /// Fire-and-forget record write. Best-effort: it doesn't wait for the write to
@@ -235,7 +256,18 @@ pub fn put_record_async(db: &Option<IdbDatabase>, record: SaveRecord) {
     let value = record_to_js(&record);
     if let Err(e) = store.put(&value) {
         weblog::error_val("IndexedDB write: put failed", &e);
+        return;
     }
+    // The `put` above only *starts* the write; the transaction can still abort
+    // later (quota exceeded, private window). That surfaces as `onabort` /
+    // `onerror` on the transaction, not the sync path — log it so a failing
+    // save isn't completely silent.
+    let error_closure = Closure::wrap(Box::new(move |_ev: Event| {
+        weblog::error("IndexedDB write failed — transaction aborted (quota / private window?)");
+    }) as Box<dyn FnMut(Event)>);
+    tx.set_onabort(Some(error_closure.as_ref().unchecked_ref()));
+    tx.set_onerror(Some(error_closure.as_ref().unchecked_ref()));
+    error_closure.forget();
 }
 
 // -- JS <-> Rust conversion ------------------------------------------------
