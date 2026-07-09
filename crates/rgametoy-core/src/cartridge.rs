@@ -331,8 +331,8 @@ impl Cartridge {
     /// [`Cartridge::from_bytes`] (so `self.ram.len()` matches the header).
     #[cfg(feature = "serialize")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
-        let kind = MbcKindTag::from(r.read_u8()?)
-            .ok_or(SaveStateError::UnknownCartridgeKind(0))?;
+        let tag = r.read_u8()?;
+        let kind = MbcKindTag::from(tag).ok_or(SaveStateError::UnknownCartridgeKind(tag))?;
         self.kind = kind;
         self.has_battery = r.read_u8()? != 0;
         self.rom_bank = r.read_u16_le()? as usize;
