@@ -70,6 +70,7 @@ pub fn rom_hash(rom: &[u8]) -> String {
 pub fn init_async(
     slot: Rc<RefCell<Option<IdbDatabase>>>,
     on_unavailable: impl FnOnce() + 'static,
+    on_ready: impl FnOnce() + 'static,
 ) -> Result<(), JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
     let factory = match window.indexed_db()? {
@@ -81,6 +82,7 @@ pub fn init_async(
     };
     let request: IdbOpenDbRequest = factory.open_with_u32(DB_NAME, DB_VERSION)?;
 
+    let on_ready_cell: SharedOnce = Rc::new(RefCell::new(Some(Box::new(on_ready))));
     let slot_for_open: Rc<RefCell<Option<IdbDatabase>>> = slot.clone();
     let open_closure = Closure::wrap(Box::new(move |ev: Event| {
         let target: IdbOpenDbRequest = match ev.target().and_then(|t| t.dyn_into().ok()) {
@@ -95,6 +97,11 @@ pub fn init_async(
             Err(_) => return,
         };
         *slot_for_open.borrow_mut() = Some(db);
+        // The DB is now usable — let the host retry any save restore it had to
+        // defer because a ROM loaded before this fired.
+        if let Some(f) = on_ready_cell.borrow_mut().take() {
+            f();
+        }
     }) as Box<dyn FnMut(Event)>);
     request.set_onsuccess(Some(open_closure.as_ref().unchecked_ref()));
     open_closure.forget();

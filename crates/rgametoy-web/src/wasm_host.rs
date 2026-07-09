@@ -132,6 +132,11 @@ pub struct Inner {
     /// FNV-1a 32-bit hex of the loaded ROM — the IDB key for the save
     /// record. Set to empty string before any ROM is loaded.
     pub rom_hash: String,
+    /// A ROM hash whose save couldn't be restored yet because IDB wasn't open
+    /// when it loaded. When IDB's `onsuccess` fires, if this still equals the
+    /// current ROM, its save is restored (a ROM loaded before IDB was ready
+    /// would otherwise start from an empty save forever).
+    pub pending_restore: Option<String>,
     /// Counter that ticks once per rAF loop. Every [`AUTOSAVE_DEBOUNCE`]
     /// frames we flush a dirty battery-RAM record back to IDB.
     pub frame_idx: u64,
@@ -188,6 +193,7 @@ impl Inner {
             storage: Rc::new(RefCell::new(None)),
             host_rc: None,
             rom_hash: String::new(),
+            pending_restore: None,
             frame_idx: 0,
             fps_cycles_ref: 0,
             fps_last_ms: 0.0,
@@ -226,24 +232,15 @@ impl Inner {
         self.rom_hash = rom_hash(bytes);
         self.set_status(&format!("loaded: {title} ({} KB)", bytes.len() / 1024));
 
-        // The IDB callback needs to re-enter `Inner` to apply RAM /
-        // state. Pass it the shared `Rc<RefCell<Inner>>` we hold.
+        // Look up and restore this ROM's save. If IDB is already open, do it
+        // now; otherwise defer — the IDB-ready hook retries (P2). Either way the
+        // restore is hash-guarded so a late reply can't land on a newer ROM.
         let Some(host_rc) = self.host_rc.clone() else { return };
-        let storage = self.storage.clone();
-        let hash = self.rom_hash.clone();
-        crate::storage::get_record_async(&storage.borrow(), hash, move |rec| {
-            let Some(rec) = rec else { return };
-            let Some(ram) = &rec.ram else { return };
-            let Ok(mut inner) = host_rc.try_borrow_mut() else { return };
-            inner.console.cartridge_mut().load_ram(ram);
-            if let Some(qs) = &rec.quick_state {
-                if let Err(e) = inner.console.load_state_bytes(qs) {
-                    weblog::error(&format!("saved quick-state could not be restored: {e}"));
-                }
-            }
-            inner.quick_state = rec.quick_state.clone();
-            inner.set_status("restored save");
-        });
+        if self.storage.borrow().is_some() {
+            restore_save(&host_rc, &self.storage, self.rom_hash.clone());
+        } else {
+            self.pending_restore = Some(self.rom_hash.clone());
+        }
     }
 
     /// Reboot the current ROM in place. Used by the Reset button: the
@@ -578,7 +575,22 @@ impl WasmHost {
                     h.set_status("IDB unavailable; saves won't persist");
                 }
             };
-            if let Err(e) = crate::storage::init_async(storage_slot, on_unavailable) {
+            // Retry a restore that had to be deferred because a ROM loaded
+            // before IDB finished opening — but only if it's still the live ROM.
+            let host_rc2 = host.inner.clone();
+            let on_ready = move || {
+                let pending = {
+                    let Ok(mut inner) = host_rc2.try_borrow_mut() else { return };
+                    match inner.pending_restore.take() {
+                        Some(h) if inner.rom_hash == h => Some((h, inner.storage.clone())),
+                        _ => None,
+                    }
+                };
+                if let Some((hash, storage)) = pending {
+                    restore_save(&host_rc2, &storage, hash);
+                }
+            };
+            if let Err(e) = crate::storage::init_async(storage_slot, on_unavailable, on_ready) {
                 web_sys::console::warn_1(&e);
             }
         }
@@ -853,6 +865,38 @@ impl WasmHost {
         })?;
         Ok(())
     }
+}
+
+/// Restore a ROM's saved RAM + quick-state from IDB into the console. The async
+/// reply re-checks that the live ROM (`inner.rom_hash`) *and* the record's hash
+/// still equal `hash` before applying anything, so a slow reply for ROM A can't
+/// clobber a since-loaded ROM B.
+fn restore_save(
+    host_rc: &Rc<RefCell<Inner>>,
+    storage: &Rc<RefCell<Option<IdbDatabase>>>,
+    hash: String,
+) {
+    let host_rc = host_rc.clone();
+    crate::storage::get_record_async(&storage.borrow(), hash.clone(), move |rec| {
+        let Ok(mut inner) = host_rc.try_borrow_mut() else { return };
+        if inner.rom_hash != hash {
+            return; // a different ROM is loaded now — discard this late reply
+        }
+        let Some(rec) = rec else { return };
+        if rec.rom_hash != hash {
+            return; // record is for another ROM — discard
+        }
+        if let Some(ram) = &rec.ram {
+            inner.console.cartridge_mut().load_ram(ram);
+        }
+        if let Some(qs) = &rec.quick_state {
+            if let Err(e) = inner.console.load_state_bytes(qs) {
+                weblog::error(&format!("saved quick-state could not be restored: {e}"));
+            }
+        }
+        inner.quick_state = rec.quick_state.clone();
+        inner.set_status("restored save");
+    });
 }
 
 /// Start (or resume) audio. Sets the enabled flag + relabels the button
