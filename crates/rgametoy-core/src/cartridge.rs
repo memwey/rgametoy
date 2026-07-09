@@ -344,11 +344,11 @@ impl Cartridge {
         let copy_n = self.ram.len().min(bytes.len());
         self.ram[..copy_n].copy_from_slice(&bytes[..copy_n]);
         if bytes.len() > self.ram.len() {
-            // Truncate quietly — over-long snapshots just mean the ROM is
+            // Truncate quietly — an over-long save state just means the ROM is
             // smaller than the one that produced the state.
         }
         // The just-loaded RAM may differ from what's persisted (.sav / IDB), so
-        // mark it dirty rather than clean — otherwise a snapshot taken with
+        // mark it dirty rather than clean — otherwise a save state taken with
         // unsaved battery RAM would never get flushed after loading, losing it.
         self.ram_dirty = true;
         Ok(())

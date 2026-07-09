@@ -211,7 +211,7 @@ impl Console {
     /// against the payload before any state is applied, so a corrupt blob never
     /// partially overwrites a running session. The cartridge's ROM is *not* part
     /// of the blob — the same ROM must be inserted (via [`Console::power_on`])
-    /// before calling this, so the cartridge's `ram` size matches the snapshot.
+    /// before calling this, so the cartridge's `ram` size matches the save state.
     #[cfg(feature = "serialize")]
     pub fn load_state_bytes(&mut self, bytes: &[u8]) -> Result<(), SaveStateError> {
         if bytes.len() < SAVE_STATE_MAGIC.len() + 1 + 4 {

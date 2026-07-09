@@ -1,6 +1,6 @@
 //! Black-box save-state restore checks via the observable machine (CPU
 //! registers, WRAM) — a complement to the byte-level round-trip in
-//! `savestate_bytes_test.rs`. Gated on the `serialize` feature that provides
+//! `save_state_bytes_test.rs`. Gated on the `serialize` feature that provides
 //! the save-state API.
 #![cfg(feature = "serialize")]
 

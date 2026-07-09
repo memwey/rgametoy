@@ -2,7 +2,7 @@
 //! little-endian read/write helpers shared by every per-module
 //! `write_state` / `read_state` pair.
 //!
-//! Terminology: a **save state** is this — a serialized snapshot of the *whole
+//! Terminology: a **save state** is this — a serialized image of the *whole
 //! machine* as a portable byte blob (`Console::save_state_bytes` /
 //! `load_state_bytes`, behind the opt-in `serialize` feature). It is distinct
 //! from `debug::Snapshot` (behind the `debug` feature), which is a read-only

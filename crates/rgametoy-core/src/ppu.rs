@@ -867,7 +867,7 @@ impl Ppu {
         write_bool(out, self.lyc_match);
         write_u8(out, self.lyc_blank);
         // `frame_ready` is a transient present-me edge, not saved state — store
-        // false so a snapshot never makes the first loaded frame skip (read side
+        // false so a save state never makes the first loaded frame skip (read side
         // forces it false regardless). Keeps re-serialize equality exact.
         write_bool(out, false);
 
@@ -944,7 +944,7 @@ impl Ppu {
         self.lyc_blank = r.read_u8()?;
         // Consume the serialized flag (kept for format stability) but force it
         // false: `frame_ready` is a transient "present me" edge, not persistent
-        // state. If a snapshot captured it set, the first `run_frame` after
+        // state. If a save state captured it set, the first `run_frame` after
         // loading would `take_frame_ready()` immediately and break, skipping a
         // frame. The write side stores `false` for the same reason.
         r.read_bool()?;
