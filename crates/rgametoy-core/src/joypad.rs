@@ -11,6 +11,19 @@
 #[cfg(feature = "serialize")]
 use crate::state::{write_u8, Reader, SaveStateError};
 
+// Joypad button bits for the `button_state` byte and
+// [`crate::Console::set_buttons`] (0 = pressed). Low nibble = directions, high
+// nibble = actions — the P1 register layout above. Exposed so frontends map
+// their host keys onto one shared definition instead of re-declaring it.
+pub const RIGHT: u8 = 0x01;
+pub const LEFT: u8 = 0x02;
+pub const UP: u8 = 0x04;
+pub const DOWN: u8 = 0x08;
+pub const A: u8 = 0x10;
+pub const B: u8 = 0x20;
+pub const SELECT: u8 = 0x40;
+pub const START: u8 = 0x80;
+
 #[derive(Clone)]
 pub struct P1 {
     /// Button state, 0 = pressed. Low nibble = directions (bit 0 Right, 1 Left,

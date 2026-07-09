@@ -14,16 +14,10 @@
 //! desktop frontend (`crates/rgametoy-desktop/src/input.rs`) — digits, not
 //! F-keys, because F5/F11/F12 etc. are reserved by the browser.
 
-/// Game Boy button bits, matching the byte P1 consumes. A set bit means the
-/// button is *released*; a cleared bit means pressed.
-pub const RIGHT: u8 = 0x01;
-pub const LEFT: u8 = 0x02;
-pub const UP: u8 = 0x04;
-pub const DOWN: u8 = 0x08;
-pub const A: u8 = 0x10;
-pub const B: u8 = 0x20;
-pub const SELECT: u8 = 0x40;
-pub const START: u8 = 0x80;
+// Game Boy button bits (0 = pressed) — the byte `Console::set_buttons` consumes.
+// Defined once in the core (`joypad`); re-exported so `KEY_MAP` / tests read
+// naturally.
+pub use rgametoy_core::joypad::{A, B, DOWN, LEFT, RIGHT, SELECT, START, UP};
 
 /// Host `event.code` → Game Boy button bit.
 const KEY_MAP: &[(&str, u8)] = &[

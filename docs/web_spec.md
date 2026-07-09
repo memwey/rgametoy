@@ -243,7 +243,7 @@ debounce 120 帧 ≈ 2 秒。
 
 热键用数字而非 F 键:`F5`/`F11`/`F12` 等被浏览器占用;快进用 `Space` 而非 `Tab`(`Tab` 是浏览器焦点切换键,即使 `preventDefault` 也别扭)。凡是模拟器要用的键,`on_keydown` 每次(含自动重复)都 `preventDefault`,防止方向键/空格滚动页面;未映射的键(`Tab`、`F5`…)照常交给浏览器。
 
-位掩码定义从 desktop 复制一份(就 8 个 const,简单)。
+按钮位掩码(`RIGHT`…`START`)由 core 定义(`rgametoy_core::joypad`,即 `set_buttons` 消费的那套契约),desktop / web 都 `pub use` 过来,单一真相源。(按键**映射表**因键类型不同 —— minifb `Key` vs `event.code` 字符串 —— 各前端一份,删不掉。)
 
 边沿检测:host 这边不存"上一次按键",`AppState` 里维护 `prev_save / prev_load / prev_screenshot / prev_palette` 四个 bool,每帧更新。
 

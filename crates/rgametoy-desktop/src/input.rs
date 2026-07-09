@@ -7,16 +7,9 @@
 use crate::display::Display;
 use minifb::Key;
 
-// Game Boy button bits, matching the byte P1 consumes: a set bit means the
-// button is released, a cleared bit means pressed.
-pub const RIGHT: u8 = 0x01;
-pub const LEFT: u8 = 0x02;
-pub const UP: u8 = 0x04;
-pub const DOWN: u8 = 0x08;
-pub const A: u8 = 0x10;
-pub const B: u8 = 0x20;
-pub const SELECT: u8 = 0x40;
-pub const START: u8 = 0x80;
+// Game Boy button bits (0 = pressed) — the byte `Console::set_buttons` consumes.
+// Defined once in the core (`joypad`); re-exported so `KEY_MAP` reads naturally.
+pub use rgametoy_core::joypad::{A, B, DOWN, LEFT, RIGHT, SELECT, START, UP};
 
 /// Host key → Game Boy button binding. Kept identical to the web frontend
 /// (`crates/rgametoy-web/src/input.rs`) so muscle memory carries across.
