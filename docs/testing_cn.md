@@ -40,7 +40,7 @@
 | `tests/timer_test.rs` | 16 位计数器、四频率、下降沿毛刺(TAC/DIV)、重载延迟三态 |
 | `tests/dma_test.rs` | OAM DMA 启动延迟、源总线阻塞(VRAM/外部)、echo 源、I/O 可读 |
 | `tests/joypad_test.rs` | P1 选择线映射、中断按选择线门控、松开/切组暴露已按键的边沿 |
-| `tests/apu_test.rs` | 四声道、包络/扫频/长度、DAC |
+| `tests/apu_test.rs` | 四声道、包络/扫频/长度、DAC;外加 length/sweep/掉电 的隐晦行为(dmg_sound 03/05/08/11)经 NR52 直接钉住,每条都验证过"回退修复就会失败" |
 | `tests/cartridge_test.rs` / `save_test.rs` | MBC、电池存档 |
 | `tests/savestate_test.rs` / `savestate_bytes_test.rs`(`--features serialize`) | 存档字节回环(重序列化相等、lockstep、拒绝时不改机器) |
 | `tests/serial_test.rs` / `rom_render_test.rs` | 串口截获、整帧渲染 |
@@ -327,6 +327,9 @@ STAT 中断(赶在下一条 `DI` 之前)。
   (`sweep_neg_used`),再经 NR10 清掉 negate 位就禁用声道。
 - **掉电边界(08/11)**:DMG 上 length **计数器**跨掉电保留(`power_off` 存/恢复),且关机时 NRx1
   length-load 可写(只写 length 字段,不写 duty)。
+
+这四条现在各有一个 `tests/apu_test.rs` 灰盒用例:驱动寄存器、从 NR52 读回声道使能来判定——所以普通
+`cargo test` 就覆盖,不只靠 env-gated 的 Blargg ROM。每条都验证过"回退对应修复就会失败"。
 
 **剩下(09/10/12 —— 播放中的波形 RAM 访问):**CH3 播放时,CPU 对 wave RAM 的访问不命中所寻址的
 字节,而是命中声道当前正读的那个字节,且只在那次读附近的窄窗口内有效(否则读返回 0xFF / 写被丢);

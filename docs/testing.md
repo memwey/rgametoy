@@ -50,7 +50,7 @@ These files live under `crates/rgametoy-core/tests/` (paths below are shortened)
 | `tests/timer_test.rs` | 16-bit counter, four frequencies, falling-edge glitches (TAC/DIV), the three-state reload delay |
 | `tests/dma_test.rs` | OAM DMA start delay, source-bus blocking (VRAM/external), echo source, I/O readable |
 | `tests/joypad_test.rs` | P1 select mapping, interrupt gated by select, release/select-exposes-held-button edges |
-| `tests/apu_test.rs` | four channels, envelope/sweep/length, DAC |
+| `tests/apu_test.rs` | four channels, envelope/sweep/length, DAC; plus the obscure length/sweep/power quirks (dmg_sound 03/05/08/11) pinned directly via NR52, each verified to fail if its fix is reverted |
 | `tests/cartridge_test.rs` / `save_test.rs` | MBC, battery saves |
 | `tests/savestate_test.rs` / `savestate_bytes_test.rs` (`--features serialize`) | save-state byte round-trip (re-serialize equality, lockstep, atomic reject) |
 | `tests/serial_test.rs` / `rom_render_test.rs` | serial capture, whole-frame rendering |
@@ -423,6 +423,11 @@ The real DMG variants (`*-dmgABC`) pass.
 - **Power edges (08/11)** — on DMG the length *counters* survive a power-off
   (`power_off` saves/restores them), and the NRx1 length-load registers are
   writable while powered off (only their length field, not duty).
+
+Each of the four is now pinned by a gray-box `tests/apu_test.rs` case that drives
+the registers and reads channel-enable back from NR52 — so they're covered by a
+plain `cargo test`, not only the env-gated Blargg ROM. Each was checked to fail
+if its fix is reverted.
 
 **Remaining (09/10/12 — wave-channel RAM access while on):** while CH3 is
 playing, CPU access to wave RAM doesn't hit the addressed byte — it hits the

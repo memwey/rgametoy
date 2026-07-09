@@ -160,3 +160,95 @@ fn register_read_masks() {
     apu.write_register(0xFF26, 0x00);
     assert_eq!(apu.read_register(0xFF26), 0x70);
 }
+
+// --- Obscure-behaviour regression tests (dmg_sound 03/05/08/11) --------------
+// These pin the length/sweep/power quirks directly, rather than relying only on
+// the env-gated Blargg dmg_sound ROM. Channel-enable is observed via NR52.
+
+/// Tick `n` T-cycles in <=255 chunks (`tick` takes a `u8`). 8192 T-cycles = one
+/// frame-sequencer step; a step landing on 0/2/4/6 clocks the length counters.
+fn tick_cycles(apu: &mut Apu, mut n: u32) {
+    while n > 0 {
+        let chunk = n.min(255) as u8;
+        apu.tick(chunk);
+        n -= chunk as u32;
+    }
+}
+
+/// CH1's enabled bit from NR52 (bit 0).
+fn ch1_on(apu: &Apu) -> bool {
+    apu.read_register(0xFF26) & 0x01 != 0
+}
+
+/// dmg_sound 03: enabling the length counter (NRx4 bit 6, 0→1) while the frame
+/// sequencer is in the *first half* of a length period clocks it once — a length
+/// of 1 then reaches 0 and the channel disables. In the second half it doesn't.
+#[test]
+fn enabling_length_in_first_half_clocks_it_once() {
+    fn ch1_survives_length_enable(first_half: bool) -> bool {
+        let mut apu = powered_apu();
+        if first_half {
+            tick_cycles(&mut apu, 8192); // step 0→1: odd step = first half
+        }
+        apu.write_register(0xFF12, 0xF0); // NR12: DAC on
+        apu.write_register(0xFF11, 0x3F); // NR11: length load 63 → counter = 1
+        apu.write_register(0xFF14, 0x80); // NR14: trigger, length disabled
+        assert!(ch1_on(&apu), "on after trigger");
+        apu.write_register(0xFF14, 0x40); // NR14: enable length, no trigger
+        ch1_on(&apu)
+    }
+    assert!(!ch1_survives_length_enable(true), "first half: extra clock disables ch1");
+    assert!(ch1_survives_length_enable(false), "second half: no extra clock");
+}
+
+/// dmg_sound 05: after a sweep calculation in negate mode, clearing NR10's
+/// negate bit disables the channel. Without a negate calc, it doesn't.
+#[test]
+fn clearing_sweep_negate_after_a_negate_calc_disables_channel() {
+    fn disabled_by_clearing_negate(negate_calc: bool) -> bool {
+        let mut apu = powered_apu();
+        apu.write_register(0xFF12, 0xF0); // NR12: DAC on
+        // NR10: period 1, negate on; shift 1 does a calc on trigger, shift 0 none.
+        apu.write_register(0xFF10, 0x18 | if negate_calc { 0x01 } else { 0x00 });
+        apu.write_register(0xFF13, 0x00); // freq low = 0 (calc can't overflow)
+        apu.write_register(0xFF14, 0x80); // trigger
+        assert!(ch1_on(&apu), "on after trigger");
+        apu.write_register(0xFF10, 0x10); // NR10: negate OFF
+        !ch1_on(&apu)
+    }
+    assert!(disabled_by_clearing_negate(true), "negate calc then clear → disabled");
+    assert!(!disabled_by_clearing_negate(false), "no negate calc → stays on");
+}
+
+/// dmg_sound 08: the NRx1 length-load register is writable while the APU is
+/// powered off (DMG), and the value survives power-on. Load length 1 while off,
+/// power on, trigger with length enabled — one clock must disable the channel.
+#[test]
+fn length_load_while_powered_off_takes_effect() {
+    let mut apu = powered_apu();
+    apu.write_register(0xFF26, 0x00); // power OFF
+    apu.write_register(0xFF11, 0x3F); // NR11 length load → counter 1 (while off)
+    apu.write_register(0xFF26, 0x80); // power ON
+    apu.write_register(0xFF12, 0xF0); // NR12 DAC on
+    apu.write_register(0xFF14, 0xC0); // NR14 trigger + length enable
+    assert!(ch1_on(&apu), "on after trigger");
+    tick_cycles(&mut apu, 8192); // one length clock: 1 → 0
+    assert!(!ch1_on(&apu), "off-write length took effect (would be 64 if ignored)");
+}
+
+/// dmg_sound 11: on DMG the length counter survives a power-off (only the rest
+/// of the channel is cleared). Set length 1 while on, power-cycle, then trigger
+/// + enable length — the preserved length expires after one clock.
+#[test]
+fn length_counter_survives_power_off() {
+    let mut apu = powered_apu();
+    apu.write_register(0xFF12, 0xF0); // DAC on
+    apu.write_register(0xFF11, 0x3F); // length load → counter 1 (while on)
+    apu.write_register(0xFF26, 0x00); // power OFF (length preserved)
+    apu.write_register(0xFF26, 0x80); // power ON
+    apu.write_register(0xFF12, 0xF0); // DAC on again (cleared by power off)
+    apu.write_register(0xFF14, 0xC0); // trigger + length enable
+    assert!(ch1_on(&apu), "on after trigger");
+    tick_cycles(&mut apu, 8192);
+    assert!(!ch1_on(&apu), "preserved length (1) expires (would be 64 if reset)");
+}
