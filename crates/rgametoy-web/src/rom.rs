@@ -6,19 +6,14 @@
 use rgametoy_core::cartridge::Cartridge;
 use wasm_bindgen::JsValue;
 
-/// Cartridge type bytes the DMG core supports: no-MBC, MBC1, MBC3, MBC5
-/// (with or without RAM and battery). The values are the byte at 0x0147 in
-/// the ROM header.
-const SUPPORTED_TYPES: &[u8] = &[
-    0x00, 0x01, 0x02, 0x03, // ROM only, MBC1, MBC1+RAM, MBC1+RAM+BATTERY
-    0x05, 0x06,             // MBC2, MBC2+BATTERY
-    0x0F, 0x10, 0x11, 0x12, 0x13, // MBC3 variants
-    0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, // MBC5 variants
-];
-
+/// Whether the ROM's cartridge-type byte (header 0x0147) is one the core
+/// actually emulates. Delegates to `Cartridge::is_type_supported` — the single
+/// source of truth — rather than a second table here, which drifted before
+/// (it listed MBC2, which the core does *not* implement, so a MBC2 ROM was
+/// accepted and then silently mis-run as MBC1).
 pub fn is_supported_type(data: &[u8]) -> bool {
     match data.get(0x0147) {
-        Some(&t) => SUPPORTED_TYPES.contains(&t),
+        Some(&t) => Cartridge::is_type_supported(t),
         None => false,
     }
 }
@@ -34,6 +29,38 @@ pub fn load_rom(data: Vec<u8>) -> Result<Cartridge, JsValue> {
         )));
     }
     Ok(Cartridge::from_bytes(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_supported_type;
+
+    fn rom_with_type(t: u8) -> Vec<u8> {
+        let mut v = vec![0u8; 0x150];
+        v[0x0147] = t;
+        v
+    }
+
+    #[test]
+    fn accepts_the_emulated_mbcs() {
+        for t in [0x00, 0x01, 0x03, 0x0F, 0x13, 0x19, 0x1E] {
+            assert!(is_supported_type(&rom_with_type(t)), "type {t:#04x}");
+        }
+    }
+
+    #[test]
+    fn rejects_mbc2_and_other_unimplemented() {
+        // MBC2 (0x05/0x06) is the regression this guards: the core doesn't
+        // implement it, so accepting it silently mis-runs the ROM as MBC1.
+        for t in [0x05, 0x06, 0x0B, 0x20, 0x22, 0xFF] {
+            assert!(!is_supported_type(&rom_with_type(t)), "type {t:#04x} must be rejected");
+        }
+    }
+
+    #[test]
+    fn rejects_a_header_too_short_to_have_a_type_byte() {
+        assert!(!is_supported_type(&[0u8; 0x100]));
+    }
 }
 
 /// Pull the cartridge title out of the ROM header (0x0134..0x0143, terminated
