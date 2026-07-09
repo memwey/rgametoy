@@ -20,8 +20,8 @@ fn save_and_load_state_restores_the_machine() {
         console.step();
     }
     let state = console.save_state_bytes();
-    let a_at_snapshot = console.get_cpu().get_registers().get_a();
-    let pc_at_snapshot = console.get_cpu().get_pc();
+    let a_at_snapshot = console.cpu().get_registers().get_a();
+    let pc_at_snapshot = console.cpu().get_pc();
 
     // Run further and mutate memory so the machine diverges from the snapshot.
     for _ in 0..20 {
@@ -29,15 +29,15 @@ fn save_and_load_state_restores_the_machine() {
     }
     console.write_mem(0xC000, 0xBB);
     assert_ne!(
-        console.get_cpu().get_registers().get_a(),
+        console.cpu().get_registers().get_a(),
         a_at_snapshot,
         "state actually changed"
     );
 
     // Restore, and everything should be back at the snapshot.
     console.load_state_bytes(&state).expect("load");
-    assert_eq!(console.get_cpu().get_registers().get_a(), a_at_snapshot, "CPU restored");
-    assert_eq!(console.get_cpu().get_pc(), pc_at_snapshot, "PC restored");
+    assert_eq!(console.cpu().get_registers().get_a(), a_at_snapshot, "CPU restored");
+    assert_eq!(console.cpu().get_pc(), pc_at_snapshot, "PC restored");
     assert_eq!(console.read_mem(0xC000), 0xAA, "WRAM restored");
 }
 

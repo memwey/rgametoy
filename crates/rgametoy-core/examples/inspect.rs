@@ -51,7 +51,7 @@ fn main() {
         "break" => {
             let pc = hex(&args[3]);
             let mut c = load();
-            if c.run_until(20_000_000, |c| c.get_cpu().get_pc() == pc) {
+            if c.run_until(20_000_000, |c| c.cpu().get_pc() == pc) {
                 println!("{}", c.snapshot());
             } else {
                 eprintln!("PC {:04X} not reached", pc);
@@ -62,7 +62,7 @@ fn main() {
             let count: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(20);
             let mut c = load();
             for _ in 0..count {
-                if !c.run_until(20_000_000, |c| c.get_cpu().get_pc() == pc) {
+                if !c.run_until(20_000_000, |c| c.cpu().get_pc() == pc) {
                     break;
                 }
                 println!("{}", c.snapshot());
@@ -96,7 +96,7 @@ fn main() {
             let count: u32 = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(1);
             let mut c = load();
             for _ in 0..count {
-                if !c.run_until(50_000_000, |c| c.get_cpu().get_pc() == pc) {
+                if !c.run_until(50_000_000, |c| c.cpu().get_pc() == pc) {
                     break;
                 }
                 let bytes: Vec<String> = (0..len)
@@ -112,7 +112,7 @@ fn main() {
             let want_ly: Option<u8> = args.get(4).and_then(|s| s.parse().ok());
             let mut c = load();
             if c.run_until(20_000_000, |c| {
-                c.get_cpu().get_pc() == pc && want_ly.is_none_or(|ly| c.peek(0xFF44) == ly)
+                c.cpu().get_pc() == pc && want_ly.is_none_or(|ly| c.peek(0xFF44) == ly)
             }) {
                 let s = c.snapshot();
                 println!("at PC {:04X}, LY={} SCX={}:", pc, s.ly, c.peek(0xFF43));

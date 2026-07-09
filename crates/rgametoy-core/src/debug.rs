@@ -10,7 +10,7 @@
 //! # use rgametoy_core::Console;
 //! # let mut console = Console::new();
 //! // Break when the CPU reaches a PC, then print everything.
-//! console.run_until(1_000_000, |c| c.get_cpu().get_pc() == 0x0048);
+//! console.run_until(1_000_000, |c| c.cpu().get_pc() == 0x0048);
 //! println!("{}", console.snapshot());
 //! ```
 

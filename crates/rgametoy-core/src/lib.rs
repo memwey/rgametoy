@@ -250,11 +250,11 @@ impl Console {
         self.sys.set_buttons(state);
     }
 
-    pub fn get_cpu(&self) -> &Cpu {
+    pub fn cpu(&self) -> &Cpu {
         &self.cpu
     }
 
-    pub fn get_cpu_mut(&mut self) -> &mut Cpu {
+    pub fn cpu_mut(&mut self) -> &mut Cpu {
         &mut self.cpu
     }
 }

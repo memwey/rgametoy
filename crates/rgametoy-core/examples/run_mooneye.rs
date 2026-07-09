@@ -24,7 +24,7 @@ fn main() {
         console.run_frame();
     }
 
-    let r = console.get_cpu().get_registers();
+    let r = console.cpu().get_registers();
     let pass = r.get_b() == 3
         && r.get_c() == 5
         && r.get_d() == 8
