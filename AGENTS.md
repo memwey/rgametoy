@@ -43,6 +43,9 @@ Accuracy is measured with community test ROMs. `docs/testing.md` (EN) and
   root; not committed): `GB_TEST_ROMS=… cargo test --release -p rgametoy-core --test rom_suite`.
   Asserts mooneye acceptance (every non-boot test passes), Blargg cpu/timing, and
   Blargg `dmg_sound`'s passing subtests.
+* The **mealybug-tearoom** PPU suite is fuzzy (per-pixel similarity, not
+  pass/fail), so it's a manual scaffold rather than an automated test — see
+  `tools/README.md`.
 * **Never regress a passing test.** Before finishing a change, keep these green:
   1. `cargo clippy -p rgametoy-core --all-targets`
   2. `cargo clippy --workspace --all-targets --all-features`

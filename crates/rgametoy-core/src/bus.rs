@@ -330,3 +330,48 @@ impl System {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sys_with_dma(source: u8, remaining: u16) -> System {
+        let mut sys = System::new();
+        sys.dma_source = source;
+        sys.dma_remaining = remaining;
+        sys
+    }
+
+    /// Idle DMA conflicts with nothing.
+    #[test]
+    fn no_conflict_when_dma_is_idle() {
+        let sys = sys_with_dma(0xC0, 0);
+        for addr in [0x0000u16, 0x8000, 0xA000, 0xFE00, 0xFF80] {
+            assert!(!dma_conflicts(&sys, addr), "{addr:#06x}");
+        }
+    }
+
+    /// DMA from WRAM (0xC0) drives the *external* bus: OAM and the external bus
+    /// are blocked; VRAM (a different bus) and HRAM stay accessible.
+    #[test]
+    fn dma_from_external_bus_blocks_external_and_oam() {
+        let sys = sys_with_dma(0xC0, 100);
+        assert!(dma_conflicts(&sys, 0xFE00), "OAM (destination)");
+        assert!(dma_conflicts(&sys, 0x4000), "ROM (external bus)");
+        assert!(dma_conflicts(&sys, 0xA000), "cart RAM (external bus)");
+        assert!(!dma_conflicts(&sys, 0x8000), "VRAM readable (video bus)");
+        assert!(!dma_conflicts(&sys, 0xFF80), "HRAM always accessible");
+    }
+
+    /// DMA from VRAM (0x80) drives the *video* bus: OAM and VRAM are blocked;
+    /// the external bus and HRAM stay accessible.
+    #[test]
+    fn dma_from_video_bus_blocks_video_and_oam() {
+        let sys = sys_with_dma(0x80, 100);
+        assert!(dma_conflicts(&sys, 0xFE00), "OAM (destination)");
+        assert!(dma_conflicts(&sys, 0x9000), "VRAM (video bus)");
+        assert!(!dma_conflicts(&sys, 0x4000), "ROM readable (external bus)");
+        assert!(!dma_conflicts(&sys, 0xA000), "cart RAM readable (external bus)");
+        assert!(!dma_conflicts(&sys, 0xFF80), "HRAM always accessible");
+    }
+}
