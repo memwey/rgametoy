@@ -195,6 +195,7 @@ pub struct Ppu {
 }
 
 impl Ppu {
+    /// A fresh PPU: LCD off, mode 0, blank VRAM/OAM and framebuffer.
     pub fn new() -> Ppu {
         Ppu {
             vram: [0; VRAM_SIZE],
@@ -294,10 +295,14 @@ impl Ppu {
         (self.mode as u8, self.dots, self.lyc_match, self.stat_line)
     }
 
+    /// The current 160×144 frame as shade values (0-3, one byte per pixel) —
+    /// the frontend maps these to colours.
     pub fn framebuffer(&self) -> &[u8] {
         &self.framebuffer
     }
 
+    /// Take-and-clear the "a frame just completed, present it" edge — true once
+    /// per finished frame. Transient: not part of the saved machine state.
     pub fn take_frame_ready(&mut self) -> bool {
         let ready = self.frame_ready;
         self.frame_ready = false;
@@ -733,6 +738,8 @@ impl Ppu {
                 || vis == PpuMode::Drawing)
     }
 
+    /// Read VRAM (0x8000-0x9FFF). Returns 0xFF while the PPU has the VRAM bus
+    /// locked (mode 3), matching hardware.
     pub fn read_vram(&self, addr: u16) -> u8 {
         if self.can_read_vram() {
             self.vram[(addr & 0x1FFF) as usize]
@@ -741,12 +748,14 @@ impl Ppu {
         }
     }
 
+    /// Write VRAM (0x8000-0x9FFF). Dropped while the VRAM bus is locked (mode 3).
     pub fn write_vram(&mut self, addr: u16, value: u8) {
         if self.can_write_vram() {
             self.vram[(addr & 0x1FFF) as usize] = value;
         }
     }
 
+    /// Read OAM (0xFE00-0xFE9F). Returns 0xFF while OAM is locked (modes 2 and 3).
     pub fn read_oam(&self, addr: u16) -> u8 {
         if self.can_read_oam() {
             self.oam[(addr - 0xFE00) as usize]
@@ -755,6 +764,7 @@ impl Ppu {
         }
     }
 
+    /// Write OAM (0xFE00-0xFE9F). Dropped while OAM is locked (modes 2 and 3).
     pub fn write_oam(&mut self, addr: u16, value: u8) {
         if self.can_write_oam() {
             self.oam[(addr - 0xFE00) as usize] = value;
@@ -768,6 +778,9 @@ impl Ppu {
         }
     }
 
+    /// Read a PPU register (0xFF40-0xFF4B). The STAT (0xFF41) mode bits
+    /// deliberately report the *visible* mode, which lags the internal one by a
+    /// few dots.
     pub fn read_register(&self, addr: u16) -> u8 {
         match addr {
             0xFF40 => self.lcdc,
@@ -790,6 +803,9 @@ impl Ppu {
         }
     }
 
+    /// Write a PPU register (0xFF40-0xFF4B). Toggling LCDC bit 7 turns the LCD
+    /// on/off (resetting or freezing the timing); STAT/LYC writes can raise a
+    /// STAT interrupt.
     pub fn write_register(&mut self, addr: u16, value: u8) {
         match addr {
             0xFF40 => {

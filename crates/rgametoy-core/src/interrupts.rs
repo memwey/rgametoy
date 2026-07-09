@@ -1,3 +1,8 @@
+//! The five DMG interrupt sources. Each owns a bit in the IE (0xFFFF) / IF
+//! (0xFF0F) registers and a fixed handler entry in the interrupt vector table;
+//! priority runs highest (VBlank) to lowest (Joypad), matching bit order.
+
+/// One of the five interrupt sources, ordered by priority / bit position.
 pub enum InterruptType {
     VBlank,
     LCDStat,
@@ -7,6 +12,7 @@ pub enum InterruptType {
 }
 
 impl InterruptType {
+    /// This source's bit in the IE / IF registers (VBlank = 0x01 … Joypad = 0x10).
     pub fn to_bit(&self) -> u8 {
         match self {
             InterruptType::VBlank => 0x01,
@@ -17,6 +23,8 @@ impl InterruptType {
         }
     }
 
+    /// The fixed vector the CPU jumps to when dispatching this interrupt
+    /// (VBlank = 0x0040, then +8 per source down to Joypad = 0x0060).
     pub fn to_handler_address(&self) -> u16 {
         match self {
             InterruptType::VBlank => 0x0040,

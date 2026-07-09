@@ -490,6 +490,7 @@ pub struct Apu {
 }
 
 impl Apu {
+    /// A fresh, powered-off APU: all channels reset, sample buffer empty.
     pub fn new() -> Apu {
         Apu {
             ch1: SquareChannel::new(true),
@@ -523,6 +524,9 @@ impl Apu {
         std::mem::take(&mut self.buffer)
     }
 
+    /// Advance every channel and the 512 Hz frame sequencer by `t_cycles`
+    /// T-cycles, appending any newly produced samples (at [`OUTPUT_RATE`]) to the
+    /// output buffer. Nothing runs while the APU is powered off.
     pub fn tick(&mut self, t_cycles: u8) {
         let cycles = t_cycles as u32;
 
@@ -616,6 +620,8 @@ impl Apu {
 
     // --- Register access ---------------------------------------------------
 
+    /// Read an APU register (0xFF10-0xFF3F). Unused/unreadable bits read as 1
+    /// (per hardware); wave RAM reads straight through.
     pub fn read_register(&self, addr: u16) -> u8 {
         match addr {
             0xFF10 => {
@@ -662,6 +668,9 @@ impl Apu {
         }
     }
 
+    /// Write an APU register (0xFF10-0xFF3F). While powered off most writes are
+    /// ignored — only NR52, wave RAM, and the NRx1 length-load fields still land
+    /// (DMG). Handles the obscure length/sweep/trigger side effects.
     pub fn write_register(&mut self, addr: u16, value: u8) {
         // Wave RAM and NR52 are writable even while powered off. On DMG the
         // length-load registers (NRx1) are too — but only their length field
