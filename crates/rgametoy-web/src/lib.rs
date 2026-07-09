@@ -1,8 +1,10 @@
 //! rgametoy-web — browser frontend for the rgametoy Game Boy emulator.
 //!
 //! The actual emulated machine lives in `rgametoy-core` (dependency-free, no
-//! host I/O); this crate is the host. See `../docs/web_spec.md` for the
-//! full architecture and `web_tasks.md` for the staged build plan.
+//! host I/O); this crate is the host. It runs the console on the rAF loop
+//! (`wasm_host`), blits to a canvas (`canvas`), outputs audio through an
+//! AudioWorklet (`audio`), and persists battery RAM / quick-states to
+//! IndexedDB (`storage`). Each module's doc comment covers its own design.
 
 use wasm_bindgen::prelude::*;
 

@@ -48,9 +48,11 @@ Accuracy is measured with community test ROMs. `docs/testing.md` (EN) and
   2. `cargo clippy --workspace --all-targets --all-features`
   3. `cargo clippy -p rgametoy-web --target wasm32-unknown-unknown -- -D warnings`
 
-  plus `cargo test`, and the ROM suite when the change could affect accuracy. A
-  new accuracy fix should add a targeted test and ratchet the now-passing ROM
-  tests so they can't silently regress.
+  plus `cargo test` **and** `cargo test --all-features` — the save-state tests
+  are behind the `serialize` feature, so a plain `cargo test` compiles and runs
+  zero of them and would miss a serialization regression. Also run the ROM suite
+  when the change could affect accuracy. A new accuracy fix should add a targeted
+  test and ratchet the now-passing ROM tests so they can't silently regress.
 
 ## Code Style
 * Idiomatic Rust; match the surrounding code's naming, comment density, and idiom.

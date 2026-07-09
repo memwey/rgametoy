@@ -29,7 +29,8 @@ real-time budget is `frame_time / multiplier`, so N× means the DMG produces
 N × 59.7 fps regardless of monitor refresh; releasing `Space` returns to full
 speed immediately. Audio is muted while fast-forwarding (at N× the APU produces
 the wrong number of samples per real second, and sped-up audio is meaningless).
-The web frontend follows the same principle — see `docs/web_spec.md` §6.1.
+The web frontend follows the same principle (paced against the wall clock, with
+the browser presenting at whatever rate it can).
 
 **Data directory**: saves and screenshots go into two subfolders under one base
 directory. The base defaults to the working directory and can be overridden with
@@ -85,18 +86,19 @@ mid-scanline register changes take effect). Not yet implemented: MBC3 RTC, MBC2.
 
 ## Architecture
 
-The project is a Cargo **workspace** of two crates mirroring the hardware / host
-split. `rgametoy-core` is the emulated machine — deterministic, dependency-free,
-and it compiles to `wasm32`. `rgametoy-desktop` is the native frontend that
-drives it (and builds the `rgametoy` binary); a future `rgametoy-web` crate could
-be a third frontend on the same core.
+The project is a Cargo **workspace** of three crates. `rgametoy-core` is the
+emulated machine — deterministic, dependency-free, and it compiles to `wasm32`.
+Two frontends drive it on the same core: `rgametoy-desktop` (native — minifb
+window, optional cpal audio; builds the `rgametoy` binary) and `rgametoy-web`
+(browser — bare wasm-bindgen / web-sys, AudioWorklet audio, IndexedDB saves,
+Trunk build).
 
 ```text
-  crates/rgametoy-desktop   native frontend — window, input, audio, files (minifb / cpal)
-  ───────────────────────   main → Emulator::run(): poll input → run_frame → present → pace
-       modules:             display · input · audio · screenshot · palette · log · paths
-                 │  run_frame() / framebuffer()          ▲  set_buttons()
-                 ▼  depends on ↓                          │
+  crates/rgametoy-desktop               crates/rgametoy-web
+  native: minifb window, cpal audio     browser: wasm-bindgen/web-sys, AudioWorklet, IDB
+       └────────────────────┬────────────────────┘
+                            │  set_buttons() / run_frame() / step() / framebuffer()
+                            ▼  both depend on ↓
   crates/rgametoy-core      the emulated DMG — deterministic, no host I/O, wasm-ready
   ──────────────────────
      Cpu (SM83) ─ bus master ─► BusView = System + inserted Cartridge (decodes addrs)

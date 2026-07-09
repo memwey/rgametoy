@@ -21,7 +21,7 @@ cargo run --release -- rom.gb 8                    # 第二个参数 = 快进倍
 相对墙钟而言,显示只是随之适配(能呈现多少呈现多少,必要时丢帧)。快进因此也以这个钟为基准——
 每个模拟帧的真实时间预算 = `一帧时间 / 倍率`,所以 N× 意味着 DMG 每秒产出 N × 59.7 帧,与显示器
 刷新率无关;松开 `Space` 立即回原速。快进期间音频静音(N× 下 APU 每真实秒产出的采样数对不上,
-且加速后的音乐也没意义)。web 前端遵循同一原则——见 `docs/web_spec.md` §6.1。
+且加速后的音乐也没意义)。web 前端遵循同一原则(按墙钟计,浏览器有多快呈现多快)。
 
 **数据目录**:存档和截图都放在一个 base 目录下的两个子文件夹,base 默认为当前目录、可用
 环境变量 `RGAMETOY_DATA_DIR` 覆盖:
@@ -65,16 +65,17 @@ PPU 像素-FIFO 渲染(背景 / 窗口 / 精灵,mode 3 逐点)、OAM DMA、串�
 
 ## 架构
 
-项目是一个 Cargo **workspace**,两个 crate 按硬件 / 宿主分层。`rgametoy-core` 是被模拟的机器——
-确定性、零依赖,能编到 `wasm32`。`rgametoy-desktop` 是驱动它的原生前端(并产出 `rgametoy` 二进制);
-将来可以再加一个 `rgametoy-web` crate 作为第三个前端,复用同一份核心。
+项目是一个 Cargo **workspace**,三个 crate。`rgametoy-core` 是被模拟的机器——确定性、零依赖,
+能编到 `wasm32`。两个前端在同一份核心上驱动它:`rgametoy-desktop`(原生 —— minifb 窗口、可选
+cpal 音频;产出 `rgametoy` 二进制)和 `rgametoy-web`(浏览器 —— 裸 wasm-bindgen / web-sys、
+AudioWorklet 音频、IndexedDB 存档、Trunk 构建)。
 
 ```text
-  crates/rgametoy-desktop   原生前端 —— 窗口、输入、音频、文件(minifb / cpal)
-  ───────────────────────   main → Emulator::run(): 读输入 → run_frame → 呈现 → 按帧节流
-       modules:             display · input · audio · screenshot · palette · log · paths
-                 │  run_frame() / framebuffer()          ▲  set_buttons()
-                 ▼  依赖 ↓                                │
+  crates/rgametoy-desktop               crates/rgametoy-web
+  原生:minifb 窗口、cpal 音频            浏览器:wasm-bindgen/web-sys、AudioWorklet、IDB
+       └────────────────────┬────────────────────┘
+                            │  set_buttons() / run_frame() / step() / framebuffer()
+                            ▼  两者都依赖 ↓
   crates/rgametoy-core      被模拟的 DMG —— 确定性、无宿主 I/O、可编 wasm
   ──────────────────────
      Cpu (SM83) ─ 总线主控 ─► BusView = System + 插入的 Cartridge (地址译码)

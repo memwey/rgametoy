@@ -2,7 +2,15 @@
 //! little-endian read/write helpers shared by every per-module
 //! `write_state` / `read_state` pair.
 //!
-//! The on-disk format is documented in `docs/web_spec.md` §5. In short:
+//! Terminology: a **save state** is this — a serialized snapshot of the *whole
+//! machine* as a portable byte blob (`Console::save_state_bytes` /
+//! `load_state_bytes`, behind the opt-in `serialize` feature). It is distinct
+//! from `debug::Snapshot` (behind the `debug` feature), which is a read-only
+//! *view* of live state for the inspector and is never serialized. "Snapshot"
+//! is reserved for
+//! that debug view; the serialized form is always called a save state.
+//!
+//! Format:
 //!
 //! ```text
 //! +---------------- header ----------------+
