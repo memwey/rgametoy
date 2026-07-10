@@ -8,7 +8,9 @@
 
 #[cfg(not(feature = "debug"))]
 fn main() {
-    eprintln!("ppu_probe requires the `debug` feature: cargo run --features debug --example ppu_probe");
+    eprintln!(
+        "ppu_probe requires the `debug` feature: cargo run --features debug --example ppu_probe"
+    );
     std::process::exit(2);
 }
 
@@ -50,14 +52,28 @@ fn main() {
     // (X=0 always 11); further sprites at the same position pay 6 each.
     println!("no sprite, SCX=0: mode3={} (hw 172)", mode3(0, &[]));
     for x in [0u8, 8, 9, 12, 15] {
-        let hw = 172 + if x == 0 { 11 } else { 11 - (x as u32 % 8).min(5) };
+        let hw = 172
+            + if x == 0 {
+                11
+            } else {
+                11 - (x as u32 % 8).min(5)
+            };
         println!("1 sprite  X={:<3}: mode3={} (hw {})", x, mode3(0, &[x]), hw);
     }
     for n in [2usize, 3, 10] {
         let hw = 172 + 11 + 6 * (n as u32 - 1);
-        println!("{} stacked X=0 : mode3={} (hw {})", n, mode3(0, &vec![0u8; n]), hw);
+        println!(
+            "{} stacked X=0 : mode3={} (hw {})",
+            n,
+            mode3(0, &vec![0u8; n]),
+            hw
+        );
     }
-    println!("2 sprites X=0,8: mode3={} (hw {})", mode3(0, &[0, 8]), 172 + 22);
+    println!(
+        "2 sprites X=0,8: mode3={} (hw {})",
+        mode3(0, &[0, 8]),
+        172 + 22
+    );
     println!(
         "10 spread X=0..72: mode3={} (hw {})",
         mode3(0, &[0, 8, 16, 24, 32, 40, 48, 56, 64, 72]),

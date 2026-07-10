@@ -61,7 +61,11 @@ fn boot(rom: &[u8]) -> Console {
 
 fn mooneye_signature(c: &Console) -> bool {
     let r = c.cpu().get_registers();
-    r.get_b() == 3 && r.get_c() == 5 && r.get_d() == 8 && r.get_e() == 13 && r.get_h() == 21
+    r.get_b() == 3
+        && r.get_c() == 5
+        && r.get_d() == 8
+        && r.get_e() == 13
+        && r.get_h() == 21
         && r.get_l() == 34
 }
 

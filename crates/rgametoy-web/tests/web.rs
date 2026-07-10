@@ -81,8 +81,12 @@ fn presenter_blits_rgba_to_a_canvas() {
         doc.create_element("canvas").unwrap().dyn_into().unwrap();
     canvas.set_width(SCREEN_W);
     canvas.set_height(SCREEN_H);
-    let ctx: web_sys::CanvasRenderingContext2d =
-        canvas.get_context("2d").unwrap().unwrap().dyn_into().unwrap();
+    let ctx: web_sys::CanvasRenderingContext2d = canvas
+        .get_context("2d")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
 
     let presenter = Presenter::new().unwrap();
     let mut buf = vec![0u8; (SCREEN_W * SCREEN_H * 4) as usize];

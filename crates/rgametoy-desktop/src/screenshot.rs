@@ -10,9 +10,9 @@
 //! at native 1:1 resolution — pixel-exact, which is what a debug screenshot
 //! wants.
 
-use rgametoy_core::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::palette::Palette;
 use crate::paths::sanitize;
+use rgametoy_core::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -83,7 +83,10 @@ mod tests {
         assert_eq!(&bmp[0..2], b"BM", "BMP magic");
         assert_eq!(bmp.len(), 54 + SCREEN_WIDTH * SCREEN_HEIGHT * 3);
         // Total-size and pixel-offset header fields.
-        assert_eq!(u32::from_le_bytes(bmp[2..6].try_into().unwrap()), bmp.len() as u32);
+        assert_eq!(
+            u32::from_le_bytes(bmp[2..6].try_into().unwrap()),
+            bmp.len() as u32
+        );
         assert_eq!(u32::from_le_bytes(bmp[10..14].try_into().unwrap()), 54);
     }
 
@@ -110,7 +113,10 @@ mod tests {
         assert!(path.exists(), "screenshot written");
         assert_eq!(path.extension().and_then(|s| s.to_str()), Some("bmp"));
         let stem = path.file_stem().unwrap().to_string_lossy();
-        assert!(stem.starts_with("Test_ROM-"), "sanitised title stem, got {stem:?}");
+        assert!(
+            stem.starts_with("Test_ROM-"),
+            "sanitised title stem, got {stem:?}"
+        );
         assert_eq!(&std::fs::read(&path).unwrap()[0..2], b"BM");
 
         let _ = std::fs::remove_dir_all(&dir); // best-effort cleanup

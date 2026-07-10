@@ -9,18 +9,18 @@
 //! Keeping the core as its own crate is what lets a future web frontend reuse it
 //! (it compiles to `wasm32`, which this crate's `minifb` / `cpal` deps do not).
 
+#[cfg(feature = "audio")]
+pub mod audio;
 pub mod display;
 pub mod input;
 pub mod log;
 pub mod palette;
 pub mod paths;
 pub mod screenshot;
-#[cfg(feature = "audio")]
-pub mod audio;
 
+use crate::display::Display;
 use rgametoy_core::cartridge::Cartridge;
 use rgametoy_core::Console;
-use crate::display::Display;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -144,12 +144,22 @@ impl Emulator {
         self.rom_title = cartridge.title();
         let has_battery = cartridge.has_battery();
         let ram_kib = cartridge.ram().len() / 1024;
+        // `Emulator::load_rom` is public and may be used more than once by an
+        // embedding host. Flush the old cartridge before replacing it and
+        // ensure no per-ROM slot/path leaks into the new session.
+        self.save_ram();
         self.console.power_on(cartridge);
+        self.quick_state = None;
+        self.save_path = None;
 
         // Startup banner: what got loaded.
         log::heading(&format!(
             "rgametoy — {}",
-            if self.rom_title.is_empty() { "(untitled)" } else { &self.rom_title }
+            if self.rom_title.is_empty() {
+                "(untitled)"
+            } else {
+                &self.rom_title
+            }
         ));
         log::field("cartridge", cart_type_name(cart_type));
         log::field("ROM", &format!("{rom_kib} KiB"));

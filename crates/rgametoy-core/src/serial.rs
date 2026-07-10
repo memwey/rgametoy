@@ -104,6 +104,9 @@ impl Serial {
         self.data = r.read_u8()?;
         self.control = r.read_u8()?;
         self.countdown = r.read_u16_le()?;
+        if self.countdown > TRANSFER_CYCLES {
+            return Err(SaveStateError::Corrupt);
+        }
         let n = r.read_u32_le()? as usize;
         let bytes = r.read_exact(n)?;
         self.output = bytes.to_vec();

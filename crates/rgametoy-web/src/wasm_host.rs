@@ -67,10 +67,7 @@ fn on_event<E: FromWasmAbi + 'static>(
 }
 
 /// [`on_event`] for a `click` handler that ignores the event object.
-fn on_click(
-    target: &impl AsRef<EventTarget>,
-    cb: impl FnMut() + 'static,
-) -> Result<(), JsValue> {
+fn on_click(target: &impl AsRef<EventTarget>, cb: impl FnMut() + 'static) -> Result<(), JsValue> {
     let closure = Closure::wrap(Box::new(cb) as Box<dyn FnMut()>);
     target
         .as_ref()
@@ -225,11 +222,23 @@ impl Inner {
                 return;
             }
         };
+        // Switching cartridges is a save boundary. Snapshot any dirty RAM into
+        // an IDB transaction before replacing the cartridge; the transaction
+        // owns its bytes and may finish after the new ROM is installed.
+        if self.has_rom && self.console.cartridge().ram_dirty() {
+            self.persist_record();
+        }
         let title = cartridge_title(bytes);
         self.title = title.clone();
         self.console.power_on(cart);
         self.has_rom = true;
         self.paused = false;
+        self.quick_state = None;
+        self.save_pending = false;
+        self.load_pending = false;
+        self.pending_restore = None;
+        self.frame_accum_ms = 0.0;
+        self.last_tick_ms = 0.0;
 
         // Compute the content hash and look up an existing save record.
         // The lookup is async: the user sees the ROM running first, and
@@ -240,7 +249,9 @@ impl Inner {
         // Look up and restore this ROM's save. If IDB is already open, do it
         // now; otherwise defer — the IDB-ready hook retries (P2). Either way the
         // restore is hash-guarded so a late reply can't land on a newer ROM.
-        let Some(host_rc) = self.host_rc.clone() else { return };
+        let Some(host_rc) = self.host_rc.clone() else {
+            return;
+        };
         if self.storage.borrow().is_some() {
             restore_save(&host_rc, &self.storage, self.rom_hash.clone());
         } else {
@@ -252,14 +263,14 @@ impl Inner {
     /// cartridge is kept, but the bus is reloaded and CPU / PPU / APU
     /// state is reset to the post-boot values. Saved RAM and the
     /// in-memory title are not touched.
-    fn reset(&mut self) {
+    fn power_cycle(&mut self) {
         if !self.has_rom {
             self.set_status("nothing to reset");
             return;
         }
-        // Reboot in place: the inserted cartridge stays; only the CPU / PPU /
-        // APU / timer return to their post-boot state. Saved RAM is untouched.
-        self.console.reset();
+        // The toolbar calls this "Reset", but the DMG has no reset button: the
+        // core models an off/on power cycle and preserves battery-backed RAM.
+        self.console.power_cycle();
         self.paused = false;
         self.set_status("reset");
     }
@@ -271,21 +282,19 @@ impl Inner {
         if self.rom_hash.is_empty() {
             return;
         }
-        let ram = self.console.cartridge().ram().to_vec();
+        let ram_snapshot = self.console.cartridge().ram().to_vec();
         // Only write if the cartridge actually has RAM — saves with no
         // external RAM are pointless, and the dirty-flag check (a separate code
         // path) would not be triggered anyway. Log to the console (not the
         // status bar — this is a ~2 s background flush, not a user action).
-        let ram = if ram.is_empty() {
+        let ram = if ram_snapshot.is_empty() {
             None
         } else {
-            web_sys::console::log_1(
-                &format!("battery saved ({} KiB)", ram.len() / 1024).into(),
-            );
-            Some(ram)
+            Some(ram_snapshot.clone())
         };
+        let hash = self.rom_hash.clone();
         let record = SaveRecord {
-            rom_hash: self.rom_hash.clone(),
+            rom_hash: hash.clone(),
             rom_title: self.title.clone(),
             ram,
             // Preserve the saved quick-state slot: autosave rewrites the whole
@@ -293,7 +302,23 @@ impl Inner {
             quick_state: self.quick_state.clone(),
             updated_at: js_sys::Date::now(),
         };
-        crate::storage::put_record_async(&self.storage.borrow(), record);
+        let Some(host_rc) = self.host_rc.clone() else {
+            return;
+        };
+        crate::storage::put_record_async(&self.storage.borrow(), record, move |committed| {
+            if !committed {
+                return;
+            }
+            let Ok(mut inner) = host_rc.try_borrow_mut() else {
+                return;
+            };
+            if inner.rom_hash == hash && inner.console.cartridge().ram() == ram_snapshot {
+                inner.console.cartridge_mut().clear_ram_dirty();
+                web_sys::console::log_1(
+                    &format!("battery saved ({} KiB)", ram_snapshot.len() / 1024).into(),
+                );
+            }
+        });
     }
 
     /// Update the quick-state slot in IDB. `Some(bytes)` saves the slot
@@ -309,7 +334,7 @@ impl Inner {
             quick_state: Some(bytes),
             updated_at: js_sys::Date::now(),
         };
-        crate::storage::put_record_async(&self.storage.borrow(), record);
+        crate::storage::put_record_async(&self.storage.borrow(), record, |_| {});
     }
 
     /// Load the quick-state slot. Prefers the in-memory copy: it's synchronous
@@ -332,11 +357,18 @@ impl Inner {
             return;
         }
         self.set_status("loading state…");
-        let Some(host_rc) = self.host_rc.clone() else { return };
+        let Some(host_rc) = self.host_rc.clone() else {
+            return;
+        };
         let storage = self.storage.clone();
         let hash = self.rom_hash.clone();
-        crate::storage::get_record_async(&storage.borrow(), hash, move |rec| {
-            let Ok(mut inner) = host_rc.try_borrow_mut() else { return };
+        crate::storage::get_record_async(&storage.borrow(), hash.clone(), move |rec| {
+            let Ok(mut inner) = host_rc.try_borrow_mut() else {
+                return;
+            };
+            if inner.rom_hash != hash {
+                return;
+            }
             match rec.and_then(|r| r.quick_state) {
                 Some(qs) => match inner.console.load_state_bytes(&qs) {
                     Ok(()) => {
@@ -359,12 +391,8 @@ impl Inner {
         // Space would scroll, the meta digits would type. Done on every keydown
         // (including autorepeat) so a held key never leaks a default action.
         // Unmapped keys (Tab, F5, …) fall through to the browser untouched.
-        let handled = s.buttons != 0xFF
-            || s.turbo
-            || s.save
-            || s.load
-            || s.screenshot
-            || s.palette_cycle;
+        let handled =
+            s.buttons != 0xFF || s.turbo || s.save || s.load || s.screenshot || s.palette_cycle;
         if handled {
             ev.prevent_default();
         }
@@ -454,7 +482,7 @@ impl Inner {
         }
         if self.reset_pending {
             self.reset_pending = false;
-            self.reset();
+            self.power_cycle();
         }
 
         self.apply_input();
@@ -472,7 +500,11 @@ impl Inner {
             };
             let turbo = self.keys_down.contains(TURBO_KEY);
             let (n, accum) = if turbo {
-                frames_to_run(self.frame_accum_ms, dt * TURBO_SPEED, TURBO_MAX_FRAMES_PER_TICK)
+                frames_to_run(
+                    self.frame_accum_ms,
+                    dt * TURBO_SPEED,
+                    TURBO_MAX_FRAMES_PER_TICK,
+                )
             } else {
                 frames_to_run(self.frame_accum_ms, dt, MAX_FRAMES_PER_TICK)
             };
@@ -505,7 +537,6 @@ impl Inner {
             && self.console.cartridge().ram_dirty()
         {
             self.persist_record();
-            self.console.cartridge_mut().clear_ram_dirty();
         }
         self.frame_idx = self.frame_idx.wrapping_add(1);
 
@@ -588,7 +619,9 @@ impl WasmHost {
             let host_rc2 = host.inner.clone();
             let on_ready = move || {
                 let pending = {
-                    let Ok(mut inner) = host_rc2.try_borrow_mut() else { return };
+                    let Ok(mut inner) = host_rc2.try_borrow_mut() else {
+                        return;
+                    };
                     match inner.pending_restore.take() {
                         Some(h) if inner.rom_hash == h => Some((h, inner.storage.clone())),
                         _ => None,
@@ -743,10 +776,7 @@ impl WasmHost {
                 host_for_reader.borrow_mut().load_rom(&vec);
             }) as Box<dyn FnMut(Event)>);
             reader
-                .add_event_listener_with_callback(
-                    "load",
-                    reader_closure.as_ref().unchecked_ref(),
-                )
+                .add_event_listener_with_callback("load", reader_closure.as_ref().unchecked_ref())
                 .unwrap();
             // Unlike the one-shot startup listeners, this reader is rebuilt on
             // every file pick, so it's parked in a field (and replaced next

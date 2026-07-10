@@ -7,11 +7,17 @@ use rgametoy_core::cartridge::Cartridge;
 #[test]
 fn cartridge_type_support_is_classified() {
     for supported in [0x00, 0x01, 0x03, 0x0F, 0x13, 0x19, 0x1E] {
-        assert!(Cartridge::is_type_supported(supported), "type {supported:#04x}");
+        assert!(
+            Cartridge::is_type_supported(supported),
+            "type {supported:#04x}"
+        );
     }
     for unsupported in [0x05, 0x06, 0x08, 0x20, 0xFC] {
         // MBC2 (05/06), plain RAM (08), MBC6 (20), and a nonsense type (FC).
-        assert!(!Cartridge::is_type_supported(unsupported), "type {unsupported:#04x}");
+        assert!(
+            !Cartridge::is_type_supported(unsupported),
+            "type {unsupported:#04x}"
+        );
     }
 }
 
@@ -64,6 +70,20 @@ fn mbc1_external_ram_enable() {
 }
 
 #[test]
+fn mbc5_rumble_bit_does_not_become_a_ram_bank_bit() {
+    let mut data = vec![0u8; 0x8000];
+    data[0x0147] = 0x1E; // MBC5 + RUMBLE + RAM + BATTERY
+    data[0x0149] = 0x05; // 64 KiB = eight RAM banks
+    let mut cart = Cartridge::from_bytes(data);
+    cart.write_rom(0x0000, 0x0A); // RAM enable
+
+    cart.write_rom(0x4000, 0x08); // rumble on, RAM bank 0
+    cart.write_ram(0xA000, 0x42);
+    cart.write_rom(0x4000, 0x00); // rumble off, still RAM bank 0
+    assert_eq!(cart.read_ram(0xA000), 0x42);
+}
+
+#[test]
 fn header_title_is_parsed() {
     let mut data = vec![0u8; 0x8000];
     for (i, b) in b"TESTROM".iter().enumerate() {
@@ -100,7 +120,10 @@ fn battery_ram_round_trips_through_a_save() {
     // A fresh cartridge restores the save and reads it back.
     let mut restored = Cartridge::from_bytes(battery_rom());
     restored.load_ram(&saved);
-    assert!(!restored.ram_dirty(), "restoring a save is not a game write");
+    assert!(
+        !restored.ram_dirty(),
+        "restoring a save is not a game write"
+    );
     restored.write_rom(0x0000, 0x0A); // enable RAM to read
     assert_eq!(restored.read_ram(0xA000), 0xAB);
     assert_eq!(restored.read_ram(0xA123), 0xCD);

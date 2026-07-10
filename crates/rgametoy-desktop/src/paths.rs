@@ -45,7 +45,10 @@ pub fn rom_hash(rom: &[u8]) -> String {
 
 /// The save-file name for a ROM: `<sanitised file stem>-<content hash>.sav`.
 pub fn save_name(rom_path: &Path, rom_bytes: &[u8]) -> String {
-    let stem = rom_path.file_stem().and_then(|s| s.to_str()).unwrap_or("rom");
+    let stem = rom_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("rom");
     format!("{}-{}.sav", sanitize(stem), rom_hash(rom_bytes))
 }
 
@@ -55,7 +58,13 @@ pub fn save_name(rom_path: &Path, rom_bytes: &[u8]) -> String {
 pub fn sanitize(s: &str) -> String {
     let cleaned: String = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let trimmed = cleaned.trim_matches('_');
     if trimmed.is_empty() {

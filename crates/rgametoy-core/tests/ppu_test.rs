@@ -32,7 +32,11 @@ fn ppu_stat_shows_oam_scan_then_drawing_on_a_normal_line() {
         ppu.tick(1);
     }
     ppu.tick(4); // dot 4
-    assert_eq!(stat_mode(&ppu), 2, "OAM scan (mode 2) visible early in the line");
+    assert_eq!(
+        stat_mode(&ppu),
+        2,
+        "OAM scan (mode 2) visible early in the line"
+    );
     ppu.tick(79); // dot 83
     assert_eq!(stat_mode(&ppu), 2, "STAT still shows mode 2 at dot 83");
     ppu.tick(1); // dot 84
@@ -124,10 +128,26 @@ mod debug_timing {
     /// sprite adds 11 dots, each further one only 6.
     #[test]
     fn stacked_sprite_penalty_aggregates() {
-        assert_eq!(mode3_len_with_sprites(&[]), 172, "baseline mode 3 is 172 dots");
-        assert_eq!(mode3_len_with_sprites(&[0]), 183, "one X=0 sprite adds the full 11");
-        assert_eq!(mode3_len_with_sprites(&[0, 0]), 189, "a second stacked adds 6");
-        assert_eq!(mode3_len_with_sprites(&[0, 0, 0]), 195, "a third stacked adds 6");
+        assert_eq!(
+            mode3_len_with_sprites(&[]),
+            172,
+            "baseline mode 3 is 172 dots"
+        );
+        assert_eq!(
+            mode3_len_with_sprites(&[0]),
+            183,
+            "one X=0 sprite adds the full 11"
+        );
+        assert_eq!(
+            mode3_len_with_sprites(&[0, 0]),
+            189,
+            "a second stacked adds 6"
+        );
+        assert_eq!(
+            mode3_len_with_sprites(&[0, 0, 0]),
+            195,
+            "a third stacked adds 6"
+        );
     }
 
     /// At most 10 sprites are selected per line, so an 11th stacked one adds no
@@ -397,8 +417,14 @@ fn ppu_bgp_change_mid_scanline_splits_the_line() {
     }
 
     let row0 = &ppu.framebuffer()[0..160];
-    assert!(row0.contains(&3), "left of the line used the old palette (shade 3)");
-    assert!(row0.contains(&1), "right of the line used the new palette (shade 1)");
+    assert!(
+        row0.contains(&3),
+        "left of the line used the old palette (shade 3)"
+    );
+    assert!(
+        row0.contains(&1),
+        "right of the line used the new palette (shade 1)"
+    );
 }
 
 /// A sprite (object) is drawn on top of the background.

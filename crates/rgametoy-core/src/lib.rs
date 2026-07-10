@@ -73,12 +73,27 @@ impl Console {
     /// next `power_on`.
     pub fn power_on(&mut self, cartridge: Cartridge) {
         self.cartridge = cartridge;
-        self.reset();
+        self.power_cycle();
     }
 
-    /// Reboot with the currently inserted cartridge: CPU registers and I/O as
-    /// left by the DMG boot ROM. Battery RAM (in the cartridge) is untouched.
-    pub fn reset(&mut self) {
+    /// Power-cycle the DMG with the currently inserted cartridge. The DMG has
+    /// no user-facing reset button: this models turning the handheld off and
+    /// back on. Battery RAM survives, while the cartridge controller, CPU and
+    /// handheld hardware return to their power-on state.
+    ///
+    /// The internal boot ROM is not executed; instead the machine enters the
+    /// deterministic post-boot state that the DMG boot ROM would leave behind.
+    pub fn power_cycle(&mut self) {
+        self.cpu = Cpu::new();
+        self.sys = System::new();
+        self.total_cycles = 0;
+        self.cartridge.reset_controller();
+        self.initialize_post_boot_state();
+    }
+
+    /// Apply the register and MMIO values observed after the DMG boot ROM.
+    /// Kept separate from `power_cycle` so the boot-ROM bypass is explicit.
+    fn initialize_post_boot_state(&mut self) {
         self.cpu.set_af(0x01B0);
         self.cpu.set_bc(0x0013);
         self.cpu.set_de(0x00D8);
@@ -239,6 +254,9 @@ impl Console {
         next.cpu.read_state(&mut r)?;
         next.cartridge.read_state(&mut r)?;
         next.sys.read_state(&mut r)?;
+        if r.remaining() != 0 {
+            return Err(SaveStateError::Corrupt);
+        }
         *self = next;
         Ok(())
     }

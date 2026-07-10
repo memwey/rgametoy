@@ -154,11 +154,10 @@ impl Timer {
                 let new_tac = value & 0x07;
                 let before = self.prev_counter;
                 // Edge already counted by this M-cycle's T4 under the old TAC.
-                let t4_old = Self::input_with(self.tac, before)
-                    && !Self::input_with(self.tac, self.counter);
+                let t4_old =
+                    Self::input_with(self.tac, before) && !Self::input_with(self.tac, self.counter);
                 // Edges the hardware ordering produces across write + T4.
-                let hw = (Self::input_with(self.tac, before)
-                    && !Self::input_with(new_tac, before))
+                let hw = (Self::input_with(self.tac, before) && !Self::input_with(new_tac, before))
                     || (Self::input_with(new_tac, before)
                         && !Self::input_with(new_tac, self.counter));
                 self.tac = new_tac;
@@ -211,6 +210,9 @@ impl Timer {
         self.prev_input = r.read_bool()?;
         self.reload_delay = r.read_u8()?;
         self.just_reloaded = r.read_bool()?;
+        if self.tac > 7 || self.reload_delay > 4 {
+            return Err(SaveStateError::Corrupt);
+        }
         Ok(())
     }
 }

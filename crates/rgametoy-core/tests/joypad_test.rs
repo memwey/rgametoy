@@ -30,7 +30,11 @@ fn selecting_directions_reads_the_dpad() {
     let mut c = Console::new();
     c.set_buttons(press(RIGHT | A)); // hold Right and A
     c.write_mem(0xFF00, SELECT_DIRECTIONS);
-    assert_eq!(c.read_mem(0xFF00) & 0x01, 0, "Right (a direction) reads pressed");
+    assert_eq!(
+        c.read_mem(0xFF00) & 0x01,
+        0,
+        "Right (a direction) reads pressed"
+    );
 }
 
 /// Selecting the action buttons reads the buttons, not the D-pad — so a held
@@ -40,7 +44,11 @@ fn selecting_actions_reads_the_buttons() {
     let mut c = Console::new();
     c.set_buttons(press(A));
     c.write_mem(0xFF00, SELECT_ACTIONS);
-    assert_eq!(c.read_mem(0xFF00) & 0x01, 0, "A (an action) reads pressed on P10");
+    assert_eq!(
+        c.read_mem(0xFF00) & 0x01,
+        0,
+        "A (an action) reads pressed on P10"
+    );
 
     c.set_buttons(press(RIGHT)); // only a direction held
     assert_eq!(
@@ -57,7 +65,10 @@ fn press_in_the_selected_group_interrupts() {
     c.write_mem(0xFF00, SELECT_DIRECTIONS);
     clear_if(&mut c);
     c.set_buttons(press(RIGHT));
-    assert!(joypad_irq(&c), "pressing Right while directions are selected interrupts");
+    assert!(
+        joypad_irq(&c),
+        "pressing Right while directions are selected interrupts"
+    );
 }
 
 /// A press in an *unselected* group raises nothing — the reported bug: polling
@@ -68,7 +79,10 @@ fn press_in_an_unselected_group_does_not_interrupt() {
     c.write_mem(0xFF00, SELECT_DIRECTIONS); // only directions selected
     clear_if(&mut c);
     c.set_buttons(press(A));
-    assert!(!joypad_irq(&c), "pressing A while directions are selected must not interrupt");
+    assert!(
+        !joypad_irq(&c),
+        "pressing A while directions are selected must not interrupt"
+    );
 }
 
 /// Releasing a button is a low→high edge and raises nothing.
@@ -79,7 +93,10 @@ fn releasing_a_button_does_not_interrupt() {
     c.set_buttons(press(RIGHT));
     clear_if(&mut c);
     c.set_buttons(0xFF); // release
-    assert!(!joypad_irq(&c), "releasing is a low→high edge, no interrupt");
+    assert!(
+        !joypad_irq(&c),
+        "releasing is a low→high edge, no interrupt"
+    );
 }
 
 /// Re-selecting a group in which a button is already held is itself a high→low
@@ -91,5 +108,8 @@ fn selecting_a_group_with_a_held_button_interrupts() {
     c.write_mem(0xFF00, SELECT_ACTIONS); // Right not visible
     clear_if(&mut c);
     c.write_mem(0xFF00, SELECT_DIRECTIONS); // exposes the held Right
-    assert!(joypad_irq(&c), "switching to directions exposes the held Right");
+    assert!(
+        joypad_irq(&c),
+        "switching to directions exposes the held Right"
+    );
 }

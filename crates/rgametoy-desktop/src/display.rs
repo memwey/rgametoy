@@ -1,6 +1,6 @@
-use rgametoy_core::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::palette;
 use minifb::{Key, Scale, Window, WindowOptions};
+use rgametoy_core::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 
 /// Window upscale factor. minifb's backend (Metal on macOS) uploads a texture
 /// the size of the buffer we hand it, then upscales it to the window on the GPU

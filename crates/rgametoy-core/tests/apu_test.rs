@@ -53,7 +53,11 @@ fn length_counter_disables_channel() {
     apu.write_register(0xFF13, 0x00);
     apu.write_register(0xFF14, 0xC7); // trigger + length enabled
 
-    assert_eq!(apu.read_register(0xFF26) & 0x01, 0x01, "enabled after trigger");
+    assert_eq!(
+        apu.read_register(0xFF26) & 0x01,
+        0x01,
+        "enabled after trigger"
+    );
 
     // Length clocks at 256 Hz; a single tick of the counter (=1) disables it.
     run_cycles(&mut apu, 4000); // ~80k T-cycles, several length clocks
@@ -92,7 +96,7 @@ fn envelope_decreases_volume() {
 fn wave_channel_produces_output() {
     let mut apu = powered_apu();
     apu.write_register(0xFF1A, 0x80); // NR30: DAC on
-    // Wave RAM: first half loud (nibbles = 15), second half silent.
+                                      // Wave RAM: first half loud (nibbles = 15), second half silent.
     for addr in 0xFF30..0xFF38 {
         apu.write_register(addr, 0xFF);
     }
@@ -105,7 +109,10 @@ fn wave_channel_produces_output() {
 
     run_cycles(&mut apu, 2000);
     let samples = apu.take_samples();
-    assert!(samples.iter().any(|&s| s.abs() > 0.01), "wave channel audible");
+    assert!(
+        samples.iter().any(|&s| s.abs() > 0.01),
+        "wave channel audible"
+    );
     assert_eq!(apu.read_register(0xFF26) & 0x04, 0x04, "channel 3 active");
 }
 
@@ -119,7 +126,10 @@ fn noise_channel_produces_output() {
 
     run_cycles(&mut apu, 2000);
     let samples = apu.take_samples();
-    assert!(samples.iter().any(|&s| s.abs() > 0.01), "noise channel audible");
+    assert!(
+        samples.iter().any(|&s| s.abs() > 0.01),
+        "noise channel audible"
+    );
 }
 
 #[test]
@@ -144,7 +154,11 @@ fn power_off_silences_and_resets() {
     let _ = apu.take_samples();
     run_cycles(&mut apu, 2000);
     let tail = apu.take_samples();
-    assert!(rms(&tail) < 1e-4, "output settles to silence, rms={}", rms(&tail));
+    assert!(
+        rms(&tail) < 1e-4,
+        "output settles to silence, rms={}",
+        rms(&tail)
+    );
 }
 
 #[test]
@@ -197,8 +211,14 @@ fn enabling_length_in_first_half_clocks_it_once() {
         apu.write_register(0xFF14, 0x40); // NR14: enable length, no trigger
         ch1_on(&apu)
     }
-    assert!(!ch1_survives_length_enable(true), "first half: extra clock disables ch1");
-    assert!(ch1_survives_length_enable(false), "second half: no extra clock");
+    assert!(
+        !ch1_survives_length_enable(true),
+        "first half: extra clock disables ch1"
+    );
+    assert!(
+        ch1_survives_length_enable(false),
+        "second half: no extra clock"
+    );
 }
 
 /// dmg_sound 05: after a sweep calculation in negate mode, clearing NR10's
@@ -208,7 +228,7 @@ fn clearing_sweep_negate_after_a_negate_calc_disables_channel() {
     fn disabled_by_clearing_negate(negate_calc: bool) -> bool {
         let mut apu = powered_apu();
         apu.write_register(0xFF12, 0xF0); // NR12: DAC on
-        // NR10: period 1, negate on; shift 1 does a calc on trigger, shift 0 none.
+                                          // NR10: period 1, negate on; shift 1 does a calc on trigger, shift 0 none.
         apu.write_register(0xFF10, 0x18 | if negate_calc { 0x01 } else { 0x00 });
         apu.write_register(0xFF13, 0x00); // freq low = 0 (calc can't overflow)
         apu.write_register(0xFF14, 0x80); // trigger
@@ -216,8 +236,14 @@ fn clearing_sweep_negate_after_a_negate_calc_disables_channel() {
         apu.write_register(0xFF10, 0x10); // NR10: negate OFF
         !ch1_on(&apu)
     }
-    assert!(disabled_by_clearing_negate(true), "negate calc then clear → disabled");
-    assert!(!disabled_by_clearing_negate(false), "no negate calc → stays on");
+    assert!(
+        disabled_by_clearing_negate(true),
+        "negate calc then clear → disabled"
+    );
+    assert!(
+        !disabled_by_clearing_negate(false),
+        "no negate calc → stays on"
+    );
 }
 
 /// dmg_sound 08: the NRx1 length-load register is writable while the APU is
@@ -233,7 +259,10 @@ fn length_load_while_powered_off_takes_effect() {
     apu.write_register(0xFF14, 0xC0); // NR14 trigger + length enable
     assert!(ch1_on(&apu), "on after trigger");
     tick_cycles(&mut apu, 8192); // one length clock: 1 → 0
-    assert!(!ch1_on(&apu), "off-write length took effect (would be 64 if ignored)");
+    assert!(
+        !ch1_on(&apu),
+        "off-write length took effect (would be 64 if ignored)"
+    );
 }
 
 /// dmg_sound 11: on DMG the length counter survives a power-off (only the rest
@@ -250,5 +279,8 @@ fn length_counter_survives_power_off() {
     apu.write_register(0xFF14, 0xC0); // trigger + length enable
     assert!(ch1_on(&apu), "on after trigger");
     tick_cycles(&mut apu, 8192);
-    assert!(!ch1_on(&apu), "preserved length (1) expires (would be 64 if reset)");
+    assert!(
+        !ch1_on(&apu),
+        "preserved length (1) expires (would be 64 if reset)"
+    );
 }

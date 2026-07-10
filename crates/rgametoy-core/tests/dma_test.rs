@@ -40,11 +40,19 @@ fn oam_dma_blocks_non_hram_for_the_transfer_window() {
 
         // Startup delay: the transfer has not begun, so the bus is still open.
         bus.tick(4);
-        assert_eq!(bus.read_byte(0xC000), 0x42, "still accessible during startup delay");
+        assert_eq!(
+            bus.read_byte(0xC000),
+            0x42,
+            "still accessible during startup delay"
+        );
 
         // Next M-cycle the transfer starts and the bus is blocked.
         bus.tick(4);
-        assert_eq!(bus.read_byte(0xC000), 0xFF, "WRAM blocked once DMA is active");
+        assert_eq!(
+            bus.read_byte(0xC000),
+            0xFF,
+            "WRAM blocked once DMA is active"
+        );
         assert_eq!(bus.read_byte(0xFF80), 0x99, "HRAM accessible during DMA");
 
         bus.tick(200);
@@ -54,7 +62,11 @@ fn oam_dma_blocks_non_hram_for_the_transfer_window() {
         for _ in 0..3 {
             bus.tick(200); // +600, past the 640 total
         }
-        assert_eq!(bus.read_byte(0xC000), 0x42, "WRAM accessible again after DMA");
+        assert_eq!(
+            bus.read_byte(0xC000),
+            0x42,
+            "WRAM accessible again after DMA"
+        );
     });
 }
 
@@ -68,10 +80,18 @@ fn vram_source_dma_leaves_the_external_bus_free() {
         // OAM (the destination) is always locked.
         assert_eq!(bus.read_byte(0xFE00), 0xFF, "OAM locked during any DMA");
         // The video bus is busy, so VRAM reads are open bus.
-        assert_eq!(bus.read_byte(0x8000), 0xFF, "VRAM blocked by a VRAM-source DMA");
+        assert_eq!(
+            bus.read_byte(0x8000),
+            0xFF,
+            "VRAM blocked by a VRAM-source DMA"
+        );
         // The external bus is free: a WRAM byte reads back its real value.
         bus.write_byte(0xC000, 0x37);
-        assert_eq!(bus.read_byte(0xC000), 0x37, "WRAM free during a VRAM-source DMA");
+        assert_eq!(
+            bus.read_byte(0xC000),
+            0x37,
+            "WRAM free during a VRAM-source DMA"
+        );
     });
 }
 
@@ -86,8 +106,16 @@ fn external_source_dma_leaves_vram_free() {
         bus.tick(4); // active
 
         assert_eq!(bus.read_byte(0xFE00), 0xFF, "OAM locked during any DMA");
-        assert_eq!(bus.read_byte(0xC000), 0xFF, "external bus blocked by the DMA");
-        assert_eq!(bus.read_byte(0x8000), 0x5A, "VRAM free during an external-source DMA");
+        assert_eq!(
+            bus.read_byte(0xC000),
+            0xFF,
+            "external bus blocked by the DMA"
+        );
+        assert_eq!(
+            bus.read_byte(0x8000),
+            0x5A,
+            "VRAM free during an external-source DMA"
+        );
     });
 }
 

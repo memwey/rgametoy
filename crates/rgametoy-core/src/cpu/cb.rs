@@ -21,7 +21,10 @@ impl Cpu {
             0x28..=0x2F => (self.cb_sra(value), false),
             0x30..=0x37 => (self.cb_swap(value), false),
             0x38..=0x3F => (self.cb_srl(value), false),
-            0x40..=0x7F => { self.cb_bit(value, (cb >> 3) & 0x07); (value, true) }
+            0x40..=0x7F => {
+                self.cb_bit(value, (cb >> 3) & 0x07);
+                (value, true)
+            }
             0x80..=0xBF => (value & !(1 << ((cb >> 3) & 0x07)), false),
             0xC0..=0xFF => (value | (1 << ((cb >> 3) & 0x07)), false),
         };

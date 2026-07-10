@@ -15,7 +15,9 @@ const PALETTE: [(u8, u8, u8); 4] = [
 ];
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| "out.bmp".to_string());
+    let path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "out.bmp".to_string());
     let mut ppu = Ppu::new();
 
     // Tile 1: solid colour 3 (dark). Tile 2: solid colour 1 (light-mid).

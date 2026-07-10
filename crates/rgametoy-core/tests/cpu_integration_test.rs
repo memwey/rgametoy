@@ -83,9 +83,44 @@ fn test_illegal_opcode_locks_up_the_cpu() {
     for _ in 0..100 {
         console.step();
     }
-    assert_eq!(console.cpu().get_pc(), pc, "PC frozen after the illegal opcode");
-    assert_eq!(console.cpu().get_registers().get_a(), 0, "the following INC A never ran");
-    assert_ne!(console.cpu().get_pc(), 0x0040, "a locked CPU ignores interrupts");
+    assert_eq!(
+        console.cpu().get_pc(),
+        pc,
+        "PC frozen after the illegal opcode"
+    );
+    assert_eq!(
+        console.cpu().get_registers().get_a(),
+        0,
+        "the following INC A never ran"
+    );
+    assert_ne!(
+        console.cpu().get_pc(),
+        0x0040,
+        "a locked CPU ignores interrupts"
+    );
+}
+
+#[test]
+fn power_cycle_rebuilds_the_machine_and_recovers_from_cpu_lockup() {
+    let mut rom = vec![0; 0x8000];
+    rom[0x0100] = 0xD3; // illegal opcode
+    let mut console = Console::new();
+    console.power_on(rgametoy_core::cartridge::Cartridge::from_bytes(rom));
+    console.write_mem(0xC000, 0xA5);
+
+    console.step(); // fetch illegal opcode and lock
+    assert_eq!(console.cpu().get_pc(), 0x0101);
+    assert!(console.total_cycles() > 0);
+
+    console.power_cycle();
+    assert_eq!(console.cpu().get_pc(), 0x0100);
+    assert_eq!(console.total_cycles(), 0);
+    assert_eq!(console.read_mem(0xC000), 0, "WRAM is power-on fresh");
+
+    // If the CPU's hidden `locked` bit survived the power cycle, this step
+    // would idle at 0x0100 instead of fetching the illegal opcode again.
+    console.step();
+    assert_eq!(console.cpu().get_pc(), 0x0101);
 }
 
 #[test]

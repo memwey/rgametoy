@@ -1,4 +1,3 @@
-
 //! The SM83 register file: the four 16-bit pairs AF/BC/DE/HL plus the stack
 //! pointer and program counter. Flags live in the low byte of AF — Z/N/H/C in
 //! bits 7/6/5/4 — and its low nibble always reads 0.
@@ -222,6 +221,9 @@ impl Registers {
     #[cfg(feature = "serialize")]
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.af = r.read_u16_le()?;
+        if self.af & 0x000F != 0 {
+            return Err(SaveStateError::Corrupt); // F's low nibble is hard-wired to zero
+        }
         self.bc = r.read_u16_le()?;
         self.de = r.read_u16_le()?;
         self.hl = r.read_u16_le()?;

@@ -129,7 +129,10 @@ impl Cpu {
         // The two HALT outcomes are mutually exclusive: `halt()` sets exactly one
         // of them (halted, or the halt-bug), and each is cleared before the other
         // could be set.
-        debug_assert!(!(self.halted && self.halt_bug), "halted and halt_bug are exclusive");
+        debug_assert!(
+            !(self.halted && self.halt_bug),
+            "halted and halt_bug are exclusive"
+        );
 
         // Capture whether an `EI` from the *previous* instruction is waiting to
         // take effect. Its `IME` promotion happens after this instruction runs,
@@ -399,6 +402,9 @@ impl Cpu {
         self.halt_bug = r.read_bool()?;
         self.locked = r.read_bool()?;
         self.cycles = r.read_u8()?;
+        if self.cycles > 24 || !self.cycles.is_multiple_of(4) || (self.halted && self.halt_bug) {
+            return Err(SaveStateError::Corrupt);
+        }
         Ok(())
     }
 }

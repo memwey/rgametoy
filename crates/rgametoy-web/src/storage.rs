@@ -18,16 +18,15 @@ use std::rc::Rc;
 use crate::weblog;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{
-    Event, IdbDatabase, IdbObjectStoreParameters,
-    IdbOpenDbRequest, IdbRequest,
-};
+use web_sys::{Event, IdbDatabase, IdbObjectStoreParameters, IdbOpenDbRequest, IdbRequest};
 
 /// A one-shot callback shared into a JS event closure via `Rc<RefCell<Option>>`
 /// so the closure can `take()` and call it exactly once.
 type SharedOnce = Rc<RefCell<Option<Box<dyn FnOnce()>>>>;
 /// Same, for the "read a record" result callback.
 type SharedResultOnce = Rc<RefCell<Option<Box<dyn FnOnce(Option<SaveRecord>)>>>>;
+/// Completion callback for a write transaction (`true` only after commit).
+type SharedWriteOnce = Rc<RefCell<Option<Box<dyn FnOnce(bool)>>>>;
 
 /// Database / object-store names. Bumping the version is what triggers
 /// `onupgradeneeded`; we only have one store at v1, so no migrations yet.
@@ -129,8 +128,7 @@ pub fn init_async(
     upgrade_closure.forget();
 
     let slot_for_error: Rc<RefCell<Option<IdbDatabase>>> = slot;
-    let on_unavailable_cell: SharedOnce =
-        Rc::new(RefCell::new(Some(Box::new(on_unavailable))));
+    let on_unavailable_cell: SharedOnce = Rc::new(RefCell::new(Some(Box::new(on_unavailable))));
     let on_unavailable_for_cb = on_unavailable_cell.clone();
     let error_closure = Closure::wrap(Box::new(move |_ev: Event| {
         weblog::error("IndexedDB open failed — saves will not persist this session");
@@ -157,14 +155,15 @@ pub fn get_record_async(
         on_result(None);
         return;
     };
-    let tx = match db.transaction_with_str_and_mode(STORE_NAME, web_sys::IdbTransactionMode::Readonly) {
-        Ok(t) => t,
-        Err(e) => {
-            weblog::error_val("IndexedDB read: open transaction failed", &e);
-            on_result(None);
-            return;
-        }
-    };
+    let tx =
+        match db.transaction_with_str_and_mode(STORE_NAME, web_sys::IdbTransactionMode::Readonly) {
+            Ok(t) => t,
+            Err(e) => {
+                weblog::error_val("IndexedDB read: open transaction failed", &e);
+                on_result(None);
+                return;
+            }
+        };
     let store = match tx.object_store(STORE_NAME) {
         Ok(s) => s,
         Err(e) => {
@@ -181,8 +180,7 @@ pub fn get_record_async(
             return;
         }
     };
-    let on_result_cell: SharedResultOnce =
-        Rc::new(RefCell::new(Some(Box::new(on_result))));
+    let on_result_cell: SharedResultOnce = Rc::new(RefCell::new(Some(Box::new(on_result))));
     let cb_cell = on_result_cell.clone();
     let closure = Closure::wrap(Box::new(move |ev: Event| {
         let target: IdbRequest = match ev.target().and_then(|t| t.dyn_into().ok()) {
@@ -230,19 +228,25 @@ pub fn get_record_async(
     error_closure.forget();
 }
 
-/// Fire-and-forget record write. Best-effort: it doesn't wait for the write to
-/// commit, but a failure to even *start* it (no store, quota, private window…)
-/// is logged to the console — otherwise saves would silently stop persisting
-/// with no signal. (A persistent failure will repeat every autosave; that
-/// repetition is itself the signal that something is wrong.)
-pub fn put_record_async(db: &Option<IdbDatabase>, record: SaveRecord) {
+/// Start a record write and report whether its transaction actually committed.
+/// Callers must not mark mutable save data clean until `on_complete(true)`:
+/// IndexedDB can accept `put()` synchronously and still abort the transaction.
+pub fn put_record_async(
+    db: &Option<IdbDatabase>,
+    record: SaveRecord,
+    on_complete: impl FnOnce(bool) + 'static,
+) {
     let Some(db) = db else {
+        on_complete(false);
         return;
     };
-    let tx = match db.transaction_with_str_and_mode(STORE_NAME, web_sys::IdbTransactionMode::Readwrite) {
+    let tx = match db
+        .transaction_with_str_and_mode(STORE_NAME, web_sys::IdbTransactionMode::Readwrite)
+    {
         Ok(t) => t,
         Err(e) => {
             weblog::error_val("IndexedDB write: open transaction failed", &e);
+            on_complete(false);
             return;
         }
     };
@@ -250,20 +254,35 @@ pub fn put_record_async(db: &Option<IdbDatabase>, record: SaveRecord) {
         Ok(s) => s,
         Err(e) => {
             weblog::error_val("IndexedDB write: object store failed", &e);
+            on_complete(false);
             return;
         }
     };
     let value = record_to_js(&record);
     if let Err(e) = store.put(&value) {
         weblog::error_val("IndexedDB write: put failed", &e);
+        on_complete(false);
         return;
     }
-    // The `put` above only *starts* the write; the transaction can still abort
-    // later (quota exceeded, private window). That surfaces as `onabort` /
-    // `onerror` on the transaction, not the sync path — log it so a failing
-    // save isn't completely silent.
+
+    let completion: SharedWriteOnce = Rc::new(RefCell::new(Some(Box::new(on_complete))));
+    let success = completion.clone();
+    let complete_closure = Closure::wrap(Box::new(move |_ev: Event| {
+        if let Some(f) = success.borrow_mut().take() {
+            f(true);
+        }
+    }) as Box<dyn FnMut(Event)>);
+    tx.set_oncomplete(Some(complete_closure.as_ref().unchecked_ref()));
+    complete_closure.forget();
+
+    // The `put` above only starts the write. Quota/private-mode failures surface
+    // on the transaction, so keep the caller's dirty state on either event.
+    let failure = completion;
     let error_closure = Closure::wrap(Box::new(move |_ev: Event| {
         weblog::error("IndexedDB write failed — transaction aborted (quota / private window?)");
+        if let Some(f) = failure.borrow_mut().take() {
+            f(false);
+        }
     }) as Box<dyn FnMut(Event)>);
     tx.set_onabort(Some(error_closure.as_ref().unchecked_ref()));
     tx.set_onerror(Some(error_closure.as_ref().unchecked_ref()));

@@ -6,7 +6,7 @@
 #![cfg(feature = "serialize")]
 
 use rgametoy_core::cartridge::Cartridge;
-use rgametoy_core::state::{SAVE_STATE_MAGIC, SAVE_STATE_VERSION};
+use rgametoy_core::state::{crc32, SaveStateError, SAVE_STATE_MAGIC, SAVE_STATE_VERSION};
 use rgametoy_core::Console;
 
 /// A no-MBC 32 KB ROM filled with `RST 38h` (0xFF). RST 38h jumps to 0x0038,
@@ -49,7 +49,8 @@ fn save_state_bytes_roundtrips_a_running_machine() {
     // as a byte diff here — a framebuffer compare would miss it for a ROM that
     // renders nothing.
     let mut b = new_console();
-    b.load_state_bytes(&blob).expect("load_state_bytes should succeed");
+    b.load_state_bytes(&blob)
+        .expect("load_state_bytes should succeed");
     assert_eq!(
         b.save_state_bytes(),
         blob,
@@ -94,6 +95,34 @@ fn load_state_bytes_rejects_corrupt_crc() {
 }
 
 #[test]
+fn load_state_bytes_rejects_trailing_payload_even_with_a_valid_crc() {
+    let mut c = new_console();
+    let good = c.save_state_bytes();
+    let mut blob = good.clone();
+    blob.push(0xAA);
+    let crc = crc32(&blob[9..]);
+    blob[5..9].copy_from_slice(&crc.to_le_bytes());
+
+    assert_eq!(c.load_state_bytes(&blob), Err(SaveStateError::Corrupt));
+    assert_eq!(c.save_state_bytes(), good, "rejected load is atomic");
+}
+
+#[test]
+fn load_state_bytes_rejects_a_different_cartridge_shape() {
+    let mut ram_rom = stub_rom();
+    ram_rom[0x0147] = 0x03; // MBC1 + RAM + battery
+    ram_rom[0x0149] = 0x02; // 8 KiB RAM
+    let mut source = Console::new();
+    source.power_on(Cartridge::from_bytes(ram_rom));
+    let blob = source.save_state_bytes();
+
+    let mut target = new_console(); // no-MBC, no external RAM
+    let before = target.save_state_bytes();
+    assert_eq!(target.load_state_bytes(&blob), Err(SaveStateError::Corrupt));
+    assert_eq!(target.save_state_bytes(), before, "rejected load is atomic");
+}
+
+#[test]
 fn save_state_bytes_keeps_machines_in_lockstep() {
     // Two consoles that diverge after snapshot+load should produce the same
     // output for as long as we run them — the snapshot is a true checkpoint,
@@ -105,7 +134,8 @@ fn save_state_bytes_keeps_machines_in_lockstep() {
     let blob = a.save_state_bytes();
 
     let mut b = new_console();
-    b.load_state_bytes(&blob).expect("load_state_bytes should succeed");
+    b.load_state_bytes(&blob)
+        .expect("load_state_bytes should succeed");
 
     // Compare the *whole* serialised machine each frame (not just the pixels),
     // so a restore that got any internal state wrong — cycle counter, APU

@@ -70,9 +70,9 @@ impl fmt::Display for SaveStateError {
 
 impl std::error::Error for SaveStateError {}
 
-/// Current save state format version. Bump when the on-disk layout changes
-/// in a way that older readers can't handle (e.g. removing or resizing a
-/// field). Adding new fields at the end is safe at the same version.
+/// Current save state format version. Bump whenever the on-disk layout changes,
+/// including when fields are appended: readers require the payload to be
+/// consumed exactly so malformed or cross-version trailing data is rejected.
 pub const SAVE_STATE_VERSION: u8 = 1;
 
 /// File magic ("RGSV" = "rgametoy save (v1)"). Prepended to every blob.
@@ -87,7 +87,11 @@ const CRC32_TABLE: [u32; 256] = {
         let mut c = n as u32;
         let mut k = 0;
         while k < 8 {
-            c = if c & 1 != 0 { 0xEDB88320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB88320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
             k += 1;
         }
         table[n] = c;

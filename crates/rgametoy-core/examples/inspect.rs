@@ -16,7 +16,9 @@
 
 #[cfg(not(feature = "debug"))]
 fn main() {
-    eprintln!("inspect requires the `debug` feature: cargo run --features debug --example inspect -- ...");
+    eprintln!(
+        "inspect requires the `debug` feature: cargo run --features debug --example inspect -- ..."
+    );
     std::process::exit(2);
 }
 

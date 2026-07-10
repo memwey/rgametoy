@@ -22,7 +22,9 @@ pub fn get_element_by_id<T: JsCast>(doc: &Document, id: &str) -> Result<T, JsVal
         .map_err(|_| JsValue::from_str(&format!("element #{id} has wrong type")))
 }
 
-pub fn get_canvas(doc: &Document) -> Result<(HtmlCanvasElement, CanvasRenderingContext2d), JsValue> {
+pub fn get_canvas(
+    doc: &Document,
+) -> Result<(HtmlCanvasElement, CanvasRenderingContext2d), JsValue> {
     let canvas: HtmlCanvasElement = get_element_by_id(doc, "screen")?;
     canvas.set_width(SCREEN_W);
     canvas.set_height(SCREEN_H);

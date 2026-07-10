@@ -141,10 +141,10 @@ fn dma_conflicts(sys: &System, addr: u16) -> bool {
     }
     let video_dma = (0x80..=0x9F).contains(&sys.dma_source);
     match addr {
-        0xFE00..=0xFE9F => true,                          // OAM (destination)
-        0x8000..=0x9FFF => video_dma,                     // VRAM (video bus)
-        0x0000..=0x7FFF | 0xA000..=0xFDFF => !video_dma,  // external bus
-        _ => false,                                       // FEA0-FEFF, I/O, HRAM
+        0xFE00..=0xFE9F => true,                         // OAM (destination)
+        0x8000..=0x9FFF => video_dma,                    // VRAM (video bus)
+        0x0000..=0x7FFF | 0xA000..=0xFDFF => !video_dma, // external bus
+        _ => false,                                      // FEA0-FEFF, I/O, HRAM
     }
 }
 
@@ -327,6 +327,13 @@ impl System {
         self.dma_source = r.read_u8()?;
         self.if_register = r.read_u8()?;
         self.ie_register = r.read_u8()?;
+        if self.dma_remaining > 160 * 4
+            || self.dma_delay > 8
+            || self.if_register & !0x1F != 0
+            || self.ie_register & !0x1F != 0
+        {
+            return Err(SaveStateError::Corrupt);
+        }
         Ok(())
     }
 }
@@ -371,7 +378,10 @@ mod tests {
         assert!(dma_conflicts(&sys, 0xFE00), "OAM (destination)");
         assert!(dma_conflicts(&sys, 0x9000), "VRAM (video bus)");
         assert!(!dma_conflicts(&sys, 0x4000), "ROM readable (external bus)");
-        assert!(!dma_conflicts(&sys, 0xA000), "cart RAM readable (external bus)");
+        assert!(
+            !dma_conflicts(&sys, 0xA000),
+            "cart RAM readable (external bus)"
+        );
         assert!(!dma_conflicts(&sys, 0xFF80), "HRAM always accessible");
     }
 }

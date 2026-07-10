@@ -97,6 +97,9 @@ impl P1 {
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.button_state = r.read_u8()?;
         self.select = r.read_u8()?;
+        if self.select & !0x30 != 0 {
+            return Err(SaveStateError::Corrupt);
+        }
         Ok(())
     }
 }

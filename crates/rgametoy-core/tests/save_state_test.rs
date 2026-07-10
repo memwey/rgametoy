@@ -36,7 +36,11 @@ fn save_and_load_state_restores_the_machine() {
 
     // Restore, and everything should be back at the snapshot.
     console.load_state_bytes(&state).expect("load");
-    assert_eq!(console.cpu().get_registers().get_a(), a_at_snapshot, "CPU restored");
+    assert_eq!(
+        console.cpu().get_registers().get_a(),
+        a_at_snapshot,
+        "CPU restored"
+    );
     assert_eq!(console.cpu().get_pc(), pc_at_snapshot, "PC restored");
     assert_eq!(console.read_mem(0xC000), 0xAA, "WRAM restored");
 }

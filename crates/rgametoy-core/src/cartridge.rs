@@ -66,6 +66,10 @@ pub struct Cartridge {
     kind: MbcKind,
     /// Whether the cartridge has battery-backed RAM (persistent save data).
     has_battery: bool,
+    /// MBC5 rumble cartridges use RAM-bank bit 3 as the motor control line, so
+    /// only bits 0-2 select RAM. The motor itself is a host-side effect we do
+    /// not expose, but the narrower bank mask is part of cartridge behaviour.
+    has_rumble: bool,
     /// Set when the game writes to external RAM; cleared once flushed to disk.
     ram_dirty: bool,
 
@@ -85,6 +89,7 @@ impl Cartridge {
             ram: Vec::new(),
             kind: MbcKind::None,
             has_battery: false,
+            has_rumble: false,
             ram_dirty: false,
             rom_bank: 1,
             ram_bank: 0,
@@ -97,13 +102,11 @@ impl Cartridge {
     /// memory bank controller and external RAM size.
     pub fn from_bytes(data: Vec<u8>) -> Cartridge {
         let type_byte = data.get(0x0147).copied().unwrap_or(0);
-        // Lenient at the library level: an unimplemented type falls back to MBC1
-        // with a warning so `from_bytes` never fails. The frontend refuses such
-        // ROMs up front via `is_type_supported` (see `Emulator::load_rom`).
-        let kind = Self::classify(type_byte).unwrap_or_else(|| {
-            eprintln!("warning: unsupported cartridge type {type_byte:#04x}, treating as MBC1");
-            MbcKind::Mbc1
-        });
+        // Lenient at the library level: an unimplemented type falls back to
+        // MBC1 so `from_bytes` remains infallible. Frontends refuse unsupported
+        // ROMs up front via `is_type_supported`; importantly, the core performs
+        // no logging or other host I/O here.
+        let kind = Self::classify(type_byte).unwrap_or(MbcKind::Mbc1);
 
         // Cartridge types whose external RAM is battery-backed (persistent).
         let has_battery = matches!(
@@ -129,6 +132,7 @@ impl Cartridge {
             ram: vec![0; ram_size],
             kind,
             has_battery,
+            has_rumble: matches!(type_byte, 0x1C..=0x1E),
             ram_dirty: false,
             rom_bank: 1,
             ram_bank: 0,
@@ -185,6 +189,15 @@ impl Cartridge {
         self.ram_dirty = false;
     }
 
+    /// Reset the memory-bank controller as a cartridge power cycle would,
+    /// while preserving the ROM and battery-backed RAM contents.
+    pub(crate) fn reset_controller(&mut self) {
+        self.rom_bank = 1;
+        self.ram_bank = 0;
+        self.ram_enabled = false;
+        self.banking_mode = 0;
+    }
+
     /// Overwrite the start of ROM bank 0 with `program`. Used to inject small
     /// test programs; real ROMs come through [`Cartridge::from_bytes`].
     pub fn load(&mut self, program: &[u8]) {
@@ -221,9 +234,7 @@ impl Cartridge {
                     addr as usize
                 }
             }
-            0x4000..=0x7FFF => {
-                self.rom_bank_number() * ROM_BANK_SIZE + (addr as usize - 0x4000)
-            }
+            0x4000..=0x7FFF => self.rom_bank_number() * ROM_BANK_SIZE + (addr as usize - 0x4000),
             _ => return 0xFF,
         };
         self.rom.get(index).copied().unwrap_or(0xFF)
@@ -257,7 +268,10 @@ impl Cartridge {
                 0x3000..=0x3FFF => {
                     self.rom_bank = (self.rom_bank & 0xFF) | (((value & 0x01) as usize) << 8);
                 }
-                0x4000..=0x5FFF => self.ram_bank = (value & 0x0F) as usize,
+                0x4000..=0x5FFF => {
+                    let mask = if self.has_rumble { 0x07 } else { 0x0F };
+                    self.ram_bank = (value & mask) as usize;
+                }
                 _ => {}
             },
         }
@@ -308,7 +322,6 @@ impl Cartridge {
         banks.next_power_of_two() - 1
     }
 
-
     /// Append the cartridge's mutable state to `out`. The ROM image itself is
     /// *not* serialized — the host is expected to have already loaded the
     /// same ROM into the console before loading a state. Saving the ROM
@@ -333,20 +346,34 @@ impl Cartridge {
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         let tag = r.read_u8()?;
         let kind = MbcKindTag::from(tag).ok_or(SaveStateError::UnknownCartridgeKind(tag))?;
-        self.kind = kind;
-        self.has_battery = r.read_u8()? != 0;
-        self.rom_bank = r.read_u16_le()? as usize;
-        self.ram_bank = r.read_u8()? as usize;
-        self.ram_enabled = r.read_u8()? != 0;
-        self.banking_mode = r.read_u8()?;
+        let has_battery = r.read_u8()? != 0;
+        let rom_bank = r.read_u16_le()? as usize;
+        let ram_bank = r.read_u8()? as usize;
+        let ram_enabled = r.read_u8()? != 0;
+        let banking_mode = r.read_u8()?;
         let n = r.read_u32_le()? as usize;
-        let bytes = r.read_exact(n)?;
-        let copy_n = self.ram.len().min(bytes.len());
-        self.ram[..copy_n].copy_from_slice(&bytes[..copy_n]);
-        if bytes.len() > self.ram.len() {
-            // Truncate quietly — an over-long save state just means the ROM is
-            // smaller than the one that produced the state.
+        let max_ram_bank = match self.kind {
+            MbcKind::None => 0,
+            MbcKind::Mbc1 => 3,
+            MbcKind::Mbc3 => 15,
+            MbcKind::Mbc5 if self.has_rumble => 7,
+            MbcKind::Mbc5 => 15,
+        };
+        if kind != self.kind
+            || has_battery != self.has_battery
+            || n != self.ram.len()
+            || banking_mode > 1
+            || rom_bank > 0x1FF
+            || ram_bank > max_ram_bank
+        {
+            return Err(SaveStateError::Corrupt);
         }
+        let bytes = r.read_exact(n)?;
+        self.rom_bank = rom_bank;
+        self.ram_bank = ram_bank;
+        self.ram_enabled = ram_enabled;
+        self.banking_mode = banking_mode;
+        self.ram.copy_from_slice(bytes);
         // The just-loaded RAM may differ from what's persisted (.sav / IDB), so
         // mark it dirty rather than clean — otherwise a save state taken with
         // unsaved battery RAM would never get flushed after loading, losing it.

@@ -10,7 +10,9 @@ use std::io::{BufWriter, Write};
 const SAMPLE_RATE: u32 = OUTPUT_RATE;
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| "out.wav".to_string());
+    let path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "out.wav".to_string());
 
     let mut apu = Apu::new();
     apu.write_register(0xFF26, 0x80); // power on

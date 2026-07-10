@@ -71,7 +71,10 @@ mod tests {
         // MBC2 (0x05/0x06) is the regression this guards: the core doesn't
         // implement it, so accepting it silently mis-runs the ROM as MBC1.
         for t in [0x05, 0x06, 0x0B, 0x20, 0x22, 0xFF] {
-            assert!(!is_supported_type(&rom_with_type(t)), "type {t:#04x} must be rejected");
+            assert!(
+                !is_supported_type(&rom_with_type(t)),
+                "type {t:#04x} must be rejected"
+            );
         }
     }
 

@@ -11,7 +11,9 @@
 //! optional `audio` feature (see `audio.rs`).
 
 #[cfg(feature = "serialize")]
-use crate::state::{write_bool, write_u16_le, write_u32_le, write_u64_le, write_u8, Reader, SaveStateError};
+use crate::state::{
+    write_bool, write_u16_le, write_u32_le, write_u64_le, write_u8, Reader, SaveStateError,
+};
 
 const CPU_HZ: f64 = 4_194_304.0;
 
@@ -224,7 +226,11 @@ impl SquareChannel {
             self.sweep_timer -= 1;
         }
         if self.sweep_timer == 0 {
-            self.sweep_timer = if self.sweep_period != 0 { self.sweep_period } else { 8 };
+            self.sweep_timer = if self.sweep_period != 0 {
+                self.sweep_period
+            } else {
+                8
+            };
             if self.sweep_enabled && self.sweep_period != 0 {
                 let new_freq = self.sweep_calc();
                 if new_freq <= 2047 && self.sweep_shift != 0 {
@@ -260,7 +266,11 @@ impl SquareChannel {
         self.env.trigger();
         if self.has_sweep {
             self.sweep_shadow = self.frequency;
-            self.sweep_timer = if self.sweep_period != 0 { self.sweep_period } else { 8 };
+            self.sweep_timer = if self.sweep_period != 0 {
+                self.sweep_period
+            } else {
+                8
+            };
             self.sweep_enabled = self.sweep_period != 0 || self.sweep_shift != 0;
             self.sweep_neg_used = false;
             if self.sweep_shift != 0 {
@@ -330,7 +340,11 @@ impl WaveChannel {
             self.freq_timer = self.period();
             self.position = (self.position + 1) & 31;
             let byte = self.wave_ram[(self.position / 2) as usize];
-            self.sample_buffer = if self.position & 1 == 0 { byte >> 4 } else { byte & 0x0F };
+            self.sample_buffer = if self.position & 1 == 0 {
+                byte >> 4
+            } else {
+                byte & 0x0F
+            };
         }
     }
 
@@ -885,6 +899,9 @@ impl Envelope {
         self.period = r.read_u8()?;
         self.volume = r.read_u8()?;
         self.timer = r.read_u8()?;
+        if self.start_volume > 15 || self.period > 7 || self.volume > 15 || self.timer > 7 {
+            return Err(SaveStateError::Corrupt);
+        }
         Ok(())
     }
 }
@@ -930,6 +947,18 @@ impl SquareChannel {
         self.sweep_enabled = r.read_bool()?;
         self.sweep_shadow = r.read_u16_le()?;
         self.sweep_neg_used = r.read_bool()?;
+        if self.duty > 3
+            || self.duty_pos > 7
+            || self.frequency > 2047
+            || self.freq_timer == 0
+            || self.length_counter > 64
+            || self.sweep_period > 7
+            || self.sweep_shift > 7
+            || self.sweep_timer > 8
+            || self.sweep_shadow > 2047
+        {
+            return Err(SaveStateError::Corrupt);
+        }
         Ok(())
     }
 }
@@ -961,6 +990,15 @@ impl WaveChannel {
         self.length_counter = r.read_u16_le()?;
         self.length_enabled = r.read_bool()?;
         self.wave_ram.copy_from_slice(r.read_exact(16)?);
+        if self.frequency > 2047
+            || self.freq_timer == 0
+            || self.position > 31
+            || self.sample_buffer > 15
+            || self.volume_code > 3
+            || self.length_counter > 256
+        {
+            return Err(SaveStateError::Corrupt);
+        }
         Ok(())
     }
 }
@@ -992,6 +1030,14 @@ impl NoiseChannel {
         self.length_counter = r.read_u16_le()?;
         self.length_enabled = r.read_bool()?;
         self.env.read_state(r)?;
+        if self.lfsr > 0x7FFF
+            || self.clock_shift > 15
+            || self.divisor_code > 7
+            || self.freq_timer == 0
+            || self.length_counter > 64
+        {
+            return Err(SaveStateError::Corrupt);
+        }
         Ok(())
     }
 }
@@ -1044,6 +1090,15 @@ impl Apu {
         self.hp_factor = f32::from_bits(r.read_u32_le()?);
         self.hp_cap_l = f32::from_bits(r.read_u32_le()?);
         self.hp_cap_r = f32::from_bits(r.read_u32_le()?);
+        if !self.sample_clock.is_finite()
+            || !self.cycles_per_sample.is_finite()
+            || self.cycles_per_sample <= 0.0
+            || !self.hp_factor.is_finite()
+            || !self.hp_cap_l.is_finite()
+            || !self.hp_cap_r.is_finite()
+        {
+            return Err(SaveStateError::Corrupt);
+        }
         // The buffer never legitimately exceeds BUFFER_CAP. Reject a larger
         // count before it can overflow `n * 4` (usize is 32-bit on wasm32) or
         // force a giant `reserve`.
@@ -1055,8 +1110,11 @@ impl Apu {
         self.buffer.clear();
         self.buffer.reserve(n);
         for chunk in bytes.chunks_exact(4) {
-            self.buffer
-                .push(f32::from_bits(u32::from_le_bytes(chunk.try_into().unwrap())));
+            let sample = f32::from_bits(u32::from_le_bytes(chunk.try_into().unwrap()));
+            if !sample.is_finite() {
+                return Err(SaveStateError::Corrupt);
+            }
+            self.buffer.push(sample);
         }
         Ok(())
     }

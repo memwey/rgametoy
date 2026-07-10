@@ -8,7 +8,11 @@ impl Cpu {
 
     pub(super) fn add_a(&mut self, value: u8, use_carry: bool) {
         let a = self.registers.get_a();
-        let carry = if use_carry && self.registers.get_flag_c() { 1u8 } else { 0 };
+        let carry = if use_carry && self.registers.get_flag_c() {
+            1u8
+        } else {
+            0
+        };
         let result = a.wrapping_add(value).wrapping_add(carry);
         self.set_flags(
             result == 0,
@@ -27,7 +31,11 @@ impl Cpu {
     /// Shared subtraction used by SUB/SBC and CP (which discards the result).
     fn sub_value(&mut self, value: u8, use_carry: bool) -> u8 {
         let a = self.registers.get_a();
-        let carry = if use_carry && self.registers.get_flag_c() { 1i16 } else { 0 };
+        let carry = if use_carry && self.registers.get_flag_c() {
+            1i16
+        } else {
+            0
+        };
         let result = a.wrapping_sub(value).wrapping_sub(carry as u8);
         self.set_flags(
             result == 0,

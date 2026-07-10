@@ -180,13 +180,13 @@ pub struct Ppu {
     line_sprites: [u8; 10], // OAM indices of sprites on this line
     line_sprite_count: u8,
     sprite_fetched: [bool; 10],
-    sprite_delay: u8,       // dots left in an in-progress sprite fetch
-    sprite_index: usize,    // line_sprites slot being fetched
+    sprite_delay: u8,    // dots left in an in-progress sprite fetch
+    sprite_index: usize, // line_sprites slot being fetched
     /// OAM X of the most recently fetched sprite, while output is still
     /// paused: another sprite at the *same* X pays only the 6-dot fetch (the
     /// background-fetch abort part of the penalty is paid once per X).
     sprite_last_x: Option<u8>,
-    warmup: u8,             // fetcher startup stall at the start of mode 3
+    warmup: u8, // fetcher startup stall at the start of mode 3
     lcd_on_line0: bool,
     /// A STAT interrupt raised by a register write (LCD enable / LYC / STAT),
     /// pending fold into IF by the bus. Register writes are outside the per-dot
@@ -586,10 +586,18 @@ impl Ppu {
         match self.fetch_state {
             FetchState::Tile => {
                 let (map_base, tile_x, tile_y) = if self.window_active {
-                    let map = if self.lcdc & 0x40 != 0 { 0x1C00 } else { 0x1800 };
+                    let map = if self.lcdc & 0x40 != 0 {
+                        0x1C00
+                    } else {
+                        0x1800
+                    };
                     (map, self.fetch_x, self.window_line / 8)
                 } else {
-                    let map = if self.lcdc & 0x08 != 0 { 0x1C00 } else { 0x1800 };
+                    let map = if self.lcdc & 0x08 != 0 {
+                        0x1C00
+                    } else {
+                        0x1800
+                    };
                     let tx = (self.scx / 8).wrapping_add(self.fetch_x) & 0x1F;
                     let ty = self.ly.wrapping_add(self.scy) / 8;
                     (map, tx, ty)
@@ -701,7 +709,11 @@ impl Ppu {
     /// intr_2_mode0_timing_sprites, whose odd sprite penalties (e.g. 11) break
     /// the 4-dot sampling degeneracy the other tests leave.
     fn visible_mode(&self) -> PpuMode {
-        let lag = if self.prev_mode == PpuMode::Drawing { 1 } else { 4 };
+        let lag = if self.prev_mode == PpuMode::Drawing {
+            1
+        } else {
+            4
+        };
         if self.transition_age < lag {
             self.prev_mode
         } else {
@@ -952,13 +964,11 @@ impl Ppu {
         self.framebuffer
             .copy_from_slice(r.read_exact(SCREEN_WIDTH * SCREEN_HEIGHT)?);
 
-        self.mode = PpuModeTag::from(r.read_u8()?)
-            .ok_or(SaveStateError::Truncated)?;
+        self.mode = PpuModeTag::from(r.read_u8()?).ok_or(SaveStateError::Truncated)?;
         self.dots = r.read_u16_le()?;
         self.ly = r.read_u8()?;
         self.window_line = r.read_u8()?;
-        self.prev_mode = PpuModeTag::from(r.read_u8()?)
-            .ok_or(SaveStateError::Truncated)?;
+        self.prev_mode = PpuModeTag::from(r.read_u8()?).ok_or(SaveStateError::Truncated)?;
         self.transition_age = r.read_u8()?;
         self.stat_line = r.read_bool()?;
         self.lyc_match = r.read_bool()?;
@@ -984,8 +994,7 @@ impl Ppu {
         self.wx = r.read_u8()?;
 
         self.draw_x = r.read_u8()?;
-        self.fetch_state = FetchStateTag::from(r.read_u8()?)
-            .ok_or(SaveStateError::Truncated)?;
+        self.fetch_state = FetchStateTag::from(r.read_u8()?).ok_or(SaveStateError::Truncated)?;
         self.fetch_step = r.read_bool()?;
         self.fetch_x = r.read_u8()?;
         self.fetch_tile_id = r.read_u8()?;
@@ -1021,6 +1030,25 @@ impl Ppu {
         self.warmup = r.read_u8()?;
         self.lcd_on_line0 = r.read_bool()?;
         self.stat_irq_pending = r.read_bool()?;
+        if self.dots > LINE_DOTS
+            || self.ly > 153
+            || self.window_line > SCREEN_HEIGHT as u8
+            || self.lyc_blank > 4
+            || self.framebuffer.iter().any(|&shade| shade > 3)
+            || self.draw_x as usize > SCREEN_WIDTH
+            || fifo_len > 8
+            || self.bg_fifo.iter().any(|&color| color > 3)
+            || self.obj_fifo.iter().any(|px| px.color > 3)
+            || self.discard > 7
+            || self.line_sprite_count > 10
+            || self.line_sprites.iter().any(|&sprite| sprite >= 40)
+            || self.sprite_delay > 10
+            || self.sprite_index >= 10
+            || self.warmup > 6
+            || (self.mode == PpuMode::Drawing && self.ly as usize >= SCREEN_HEIGHT)
+        {
+            return Err(SaveStateError::Corrupt);
+        }
         Ok(())
     }
 }

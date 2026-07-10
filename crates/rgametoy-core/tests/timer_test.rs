@@ -139,7 +139,11 @@ fn toggling_tac_off_on_a_high_counter_bit_ticks_tima() {
     for _ in 0..600 {
         t.tick(1);
     }
-    assert_eq!(t.read_register(0xFF05), 0, "disabled timer never ticked TIMA");
+    assert_eq!(
+        t.read_register(0xFF05),
+        0,
+        "disabled timer never ticked TIMA"
+    );
 
     t.write_register(0xFF07, 0x04); // enable, freq 00 — bit 9 already high
     assert_eq!(
@@ -183,7 +187,11 @@ fn tima_overflow_reloads_from_tma_after_a_delay_and_interrupts() {
 
     let irq = t.tick(16); // TIMA overflows on this step
     assert!(!irq, "interrupt is delayed one M-cycle after overflow");
-    assert_eq!(t.read_register(0xFF05), 0x00, "TIMA reads 0 during the delay");
+    assert_eq!(
+        t.read_register(0xFF05),
+        0x00,
+        "TIMA reads 0 during the delay"
+    );
 
     let irq = t.tick(4); // reload completes
     assert!(irq, "interrupt fires when TIMA reloads");
