@@ -2,6 +2,8 @@
 //! 0xFF; the bytes the program sends are captured so test ROMs (which print
 //! their results over serial) can be observed.
 
+use std::collections::VecDeque;
+
 #[cfg(feature = "serialize")]
 use crate::state::{write_u16_le, write_u32_le, write_u8, Reader, SaveStateError};
 
@@ -24,8 +26,9 @@ pub struct Serial {
     control: u8, // SC (0xFF02)
     /// T-cycles left in the active transfer (0 = idle).
     countdown: u16,
-    /// Bytes shifted out by the program, for test-ROM output.
-    output: Vec<u8>,
+    /// Bytes shifted out by the program, for test-ROM output. A deque so the
+    /// drop-oldest eviction on overflow stays O(1) (`Vec::remove(0)` is O(n)).
+    output: VecDeque<u8>,
 }
 
 impl Serial {
@@ -34,7 +37,7 @@ impl Serial {
             data: 0x00,
             control: 0x00,
             countdown: 0,
-            output: Vec::new(),
+            output: VecDeque::new(),
         }
     }
 
@@ -53,9 +56,9 @@ impl Serial {
         // byte is 0xFF. Clear the transfer-start bit.
         self.countdown = 0;
         if self.output.len() == OUTPUT_CAP {
-            self.output.remove(0); // drop the oldest byte (see OUTPUT_CAP)
+            self.output.pop_front(); // drop the oldest byte (see OUTPUT_CAP)
         }
-        self.output.push(self.data);
+        self.output.push_back(self.data);
         self.data = 0xFF;
         self.control &= 0x7F;
         true
@@ -83,9 +86,12 @@ impl Serial {
         }
     }
 
-    /// Remove and return the bytes shifted out since the last call.
+    /// Remove and return the bytes shifted out since the last call. Returns a
+    /// `Vec` for the convenience of callers that write the bytes to a file or
+    /// a status bar — the deque is drained in place, keeping its allocation
+    /// for the next round.
     pub fn take_output(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.output)
+        self.output.drain(..).collect()
     }
 }
 
@@ -127,7 +133,7 @@ impl Serial {
             return Err(SaveStateError::Corrupt);
         }
         let bytes = r.read_exact(n)?;
-        self.output = bytes.to_vec();
+        self.output = bytes.to_vec().into();
         Ok(())
     }
 }
@@ -152,7 +158,7 @@ mod tests {
             remaining -= step as u16;
         }
         assert_eq!(s.output.len(), OUTPUT_CAP);
-        assert_eq!(s.output[0], 1, "the oldest byte (0) was dropped");
-        assert_eq!(*s.output.last().unwrap(), 0x42);
+        assert_eq!(*s.output.front().unwrap(), 1, "the oldest byte (0) was dropped");
+        assert_eq!(*s.output.back().unwrap(), 0x42);
     }
 }

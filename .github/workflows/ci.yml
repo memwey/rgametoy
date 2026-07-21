@@ -18,6 +18,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # `--all-features` enables `rgametoy-desktop`'s `audio` feature, which
+      # pulls in cpal; on Linux cpal builds against ALSA and needs the headers.
+      - name: Install ALSA headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       # The manual ratchet from AGENTS.md, in CI form.
       - name: Clippy (core)
         run: cargo clippy -p rgametoy-core --all-targets
