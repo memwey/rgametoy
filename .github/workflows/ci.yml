@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ratchet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The manual ratchet from AGENTS.md, in CI form.
+      - name: Clippy (core)
+        run: cargo clippy -p rgametoy-core --all-targets
+
+      - name: Clippy (workspace, all features)
+        run: cargo clippy --workspace --all-targets --all-features
+
+      - name: Clippy (web, wasm32)
+        run: cargo clippy -p rgametoy-web --target wasm32-unknown-unknown -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+      # The save-state tests are behind the `serialize` feature; a plain
+      # `cargo test` compiles and runs zero of them.
+      - name: Test (all features)
+        run: cargo test --all-features

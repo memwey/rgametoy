@@ -6,7 +6,7 @@
 //! input mapping, audio backend, pacing, and save files; [`Emulator`] wires them
 //! together and the `rgametoy` binary (`main.rs`) runs it.
 //!
-//! Keeping the core as its own crate is what lets a future web frontend reuse it
+//! Keeping the core as its own crate is what lets the web frontend reuse it
 //! (it compiles to `wasm32`, which this crate's `minifb` / `cpal` deps do not).
 
 #[cfg(feature = "audio")]
@@ -40,21 +40,8 @@ fn frame_budget(speed: f64) -> Duration {
     Duration::from_secs_f64(FRAME_SECONDS / speed.max(1e-3))
 }
 
-/// Human name for a supported cartridge-type byte (header 0x0147), for the
-/// startup banner. Mirrors the set `Cartridge::is_type_supported` accepts.
-fn cart_type_name(type_byte: u8) -> &'static str {
-    match type_byte {
-        0x00 => "ROM only",
-        0x01..=0x03 => "MBC1",
-        0x0F..=0x13 => "MBC3",
-        0x19..=0x1E => "MBC5",
-        _ => "unknown",
-    }
-}
-
 pub struct Emulator {
     console: Console,
-    display: Display,
     /// Speed multiplier applied while the fast-forward key is held.
     turbo_speed: f64,
     /// Instant save-state slot (a serialized blob), plus previous key states
@@ -94,7 +81,6 @@ impl Emulator {
 
         Emulator {
             console,
-            display: Display::new(),
             turbo_speed: DEFAULT_TURBO_SPEED,
             quick_state: None,
             prev_save: false,
@@ -161,7 +147,7 @@ impl Emulator {
                 &self.rom_title
             }
         ));
-        log::field("cartridge", cart_type_name(cart_type));
+        log::field("cartridge", Cartridge::type_name(cart_type));
         log::field("ROM", &format!("{rom_kib} KiB"));
         if ram_kib > 0 {
             let battery = if has_battery { " (battery)" } else { "" };
@@ -170,7 +156,7 @@ impl Emulator {
 
         if has_battery {
             // Saves live in <data-dir>/saves keyed by ROM name + content hash.
-            let save_path = self.data_dir.join("saves").join(save_name);
+            let save_path = paths::saves_dir(&self.data_dir).join(save_name);
             match std::fs::read(&save_path) {
                 Ok(saved) => {
                     self.console.cartridge_mut().load_ram(&saved);
@@ -187,6 +173,9 @@ impl Emulator {
     }
 
     pub fn run(&mut self) {
+        // The window opens here, on entry to the main loop, rather than in
+        // `new` — so a ROM that fails `load_rom` never flashes a window.
+        let mut display = Display::new();
         let mut frames_since_save = 0u32;
         // Rolling window for the fps read-out shown in the window title.
         let mut fps_frames = 0u32;
@@ -195,12 +184,12 @@ impl Emulator {
         // shown in the title so the core-vs-frontend split is visible.
         #[cfg(feature = "debug")]
         let (mut core_accum, mut present_accum) = (Duration::ZERO, Duration::ZERO);
-        while self.display.is_open() {
+        while display.is_open() {
             let frame_start = Instant::now();
 
-            let input = crate::input::poll(&self.display);
+            let input = crate::input::poll(&display);
             self.apply_input(&input);
-            self.handle_hotkeys(&input);
+            self.handle_hotkeys(&input, &mut display);
             let speed = if input.turbo { self.turbo_speed } else { 1.0 };
 
             // Emulate one frame in the core, then present it — presentation is a
@@ -214,7 +203,7 @@ impl Emulator {
             }
             #[cfg(feature = "debug")]
             let present_t = Instant::now();
-            self.display.present(self.console.framebuffer());
+            display.present(self.console.framebuffer());
             #[cfg(feature = "debug")]
             {
                 present_accum += present_t.elapsed();
@@ -277,9 +266,9 @@ impl Emulator {
                 };
                 #[cfg(not(feature = "debug"))]
                 let extra = "";
-                self.display.set_title(&format!(
+                display.set_title(&format!(
                     "rgametoy — {fps:.0} fps ({speed:.1}x) — {}{extra}",
-                    self.display.palette_name()
+                    display.palette_name()
                 ));
                 fps_frames = 0;
                 fps_window_start = Instant::now();
@@ -338,7 +327,7 @@ impl Emulator {
 
     /// Handle the edge-triggered hotkeys (one press acts once): 5/7 store and
     /// restore the instant save-state slot, 2 saves a screenshot.
-    fn handle_hotkeys(&mut self, input: &crate::input::InputState) {
+    fn handle_hotkeys(&mut self, input: &crate::input::InputState, display: &mut Display) {
         if input.save && !self.prev_save {
             self.quick_state = Some(self.console.save_state_bytes());
             log::info("save state stored");
@@ -352,10 +341,10 @@ impl Emulator {
             }
         }
         if input.screenshot && !self.prev_screenshot {
-            self.take_screenshot();
+            self.take_screenshot(display);
         }
         if input.palette_cycle && !self.prev_palette {
-            let name = self.display.cycle_palette();
+            let name = display.cycle_palette();
             log::info(&format!("palette: {name}"));
         }
         self.prev_save = input.save;
@@ -367,15 +356,15 @@ impl Emulator {
     /// Write the current frame to the screenshot directory, reporting where it
     /// landed (or why it failed) — a screenshot should never take down the
     /// emulator.
-    fn take_screenshot(&mut self) {
+    fn take_screenshot(&self, display: &Display) {
         let hint = if self.rom_title.is_empty() {
             "rgametoy"
         } else {
             &self.rom_title
         };
-        let dir = self.data_dir.join("screenshots");
+        let dir = paths::screenshots_dir(&self.data_dir);
         // Match the window: screenshots use the active palette.
-        let palette = self.display.palette();
+        let palette = display.palette();
         match screenshot::save(self.console.framebuffer(), &dir, hint, palette) {
             Ok(path) => log::info(&format!("screenshot saved: {}", path.display())),
             Err(e) => log::error(&format!("screenshot failed ({}): {e}", dir.display())),

@@ -4,31 +4,37 @@
 //! each closure. The rAF loop is the sole driver of emulation; audio is a
 //! downstream sink (`audio::AudioPlayer`) fed each frame — it does not run the
 //! console, so no closure needs to re-borrow `Inner` from the audio thread.
+//!
+//! This module holds the shared state (`Inner`), the per-tick emulation body
+//! (`step_and_present`), and the `WasmHost` API the JS side calls. The DOM
+//! event wiring, the ROM/save persistence flow, and the audio toggle each
+//! live in a child module (`wiring`, `saves`, `audio_toggle`); they `impl`
+//! the types defined here, which Rust allows within the same crate.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use rgametoy_core::cartridge::Cartridge;
 use rgametoy_core::Console;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::convert::FromWasmAbi;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{
-    CanvasRenderingContext2d, Event, EventTarget, HtmlCanvasElement, HtmlInputElement,
-    KeyboardEvent,
-};
+use web_sys::{CanvasRenderingContext2d, EventTarget, HtmlCanvasElement, KeyboardEvent};
 
 use crate::audio::AudioPlayer;
-use crate::canvas::{get_canvas, get_element_by_id, Presenter, RGBA_LEN};
+use crate::canvas::{get_canvas, Presenter, RGBA_LEN};
 use crate::input::{from_keydown, InputState, TURBO_KEY};
 use crate::pacing::{frames_to_run, DMG_FRAME_MS, MAX_CATCHUP_MS, MAX_FRAMES_PER_TICK};
 use crate::palette::{rgba_table, shade_to_rgba, PALETTES};
-use crate::rom::{cartridge_title, load_rom};
-use crate::storage::{rom_hash, SaveRecord};
 use crate::ui::{get_html_element, set_text};
 use crate::weblog;
 use web_sys::IdbDatabase;
+
+use saves::restore_save;
+
+mod audio_toggle;
+mod saves;
+mod wiring;
 
 /// Fast-forward multiplier: emulation runs this many times real time while the
 /// turbo key is held. Matches the desktop frontend's default. Paced against the
@@ -161,7 +167,7 @@ pub struct Inner {
     // (buttons, keyboard) are registered via `on_click`/`on_event`, which
     // leak their closure once instead of parking it in a field here.
     pub raf_slot: RafSlot,
-    pub rom_reader_closure: Option<Closure<dyn FnMut(Event)>>,
+    pub rom_reader_closure: Option<Closure<dyn FnMut(web_sys::Event)>>,
 }
 
 impl Inner {
@@ -204,182 +210,6 @@ impl Inner {
             raf_slot: Rc::new(RefCell::new(None)),
             rom_reader_closure: None,
         })
-    }
-
-    /// Install a ROM from raw bytes. The frontend already sanity-checks the
-    /// header (`rom::is_supported_type`); any further failure is reported
-    /// into `#status` so the user sees it without having to open DevTools.
-    /// On success, also looks up the matching IDB save record (if any) and
-    /// restores its RAM / quick-state into the console. The IDB read is
-    /// fire-and-forget — the user sees "loaded: <title>" immediately and
-    /// the restored-save status message lands a tick later.
-    fn load_rom(&mut self, bytes: &[u8]) {
-        let cart: Cartridge = match load_rom(bytes.to_vec()) {
-            Ok(c) => c,
-            Err(e) => {
-                let msg = e.as_string().unwrap_or_else(|| "load failed".to_string());
-                self.set_status(&format!("ROM error: {msg}"));
-                return;
-            }
-        };
-        // Switching cartridges is a save boundary. Snapshot any dirty RAM into
-        // an IDB transaction before replacing the cartridge; the transaction
-        // owns its bytes and may finish after the new ROM is installed.
-        if self.has_rom && self.console.cartridge().ram_dirty() {
-            self.persist_record();
-        }
-        let title = cartridge_title(bytes);
-        self.title = title.clone();
-        self.console.power_on(cart);
-        self.has_rom = true;
-        self.paused = false;
-        self.quick_state = None;
-        self.save_pending = false;
-        self.load_pending = false;
-        self.pending_restore = None;
-        self.frame_accum_ms = 0.0;
-        self.last_tick_ms = 0.0;
-
-        // Compute the content hash and look up an existing save record.
-        // The lookup is async: the user sees the ROM running first, and
-        // the saved RAM / state land a tick later.
-        self.rom_hash = rom_hash(bytes);
-        self.set_status(&format!("loaded: {title} ({} KB)", bytes.len() / 1024));
-
-        // Look up and restore this ROM's save. If IDB is already open, do it
-        // now; otherwise defer — the IDB-ready hook retries (P2). Either way the
-        // restore is hash-guarded so a late reply can't land on a newer ROM.
-        let Some(host_rc) = self.host_rc.clone() else {
-            return;
-        };
-        if self.storage.borrow().is_some() {
-            restore_save(&host_rc, &self.storage, self.rom_hash.clone());
-        } else {
-            self.pending_restore = Some(self.rom_hash.clone());
-        }
-    }
-
-    /// Reboot the current ROM in place. Used by the Reset button: the
-    /// cartridge is kept, but the bus is reloaded and CPU / PPU / APU
-    /// state is reset to the post-boot values. Saved RAM and the
-    /// in-memory title are not touched.
-    fn power_cycle(&mut self) {
-        if !self.has_rom {
-            self.set_status("nothing to reset");
-            return;
-        }
-        // The toolbar calls this "Reset", but the DMG has no reset button: the
-        // core models an off/on power cycle and preserves battery-backed RAM.
-        self.console.power_cycle();
-        self.paused = false;
-        self.set_status("reset");
-    }
-
-    /// Persist the current battery RAM to IDB. Called from the rAF loop
-    /// on a debounced cadence, and from the save/load hotkeys (5/7) so
-    /// the user-visible slot updates immediately.
-    fn persist_record(&mut self) {
-        if self.rom_hash.is_empty() {
-            return;
-        }
-        let ram_snapshot = self.console.cartridge().ram().to_vec();
-        // Only write if the cartridge actually has RAM — saves with no
-        // external RAM are pointless, and the dirty-flag check (a separate code
-        // path) would not be triggered anyway. Log to the console (not the
-        // status bar — this is a ~2 s background flush, not a user action).
-        let ram = if ram_snapshot.is_empty() {
-            None
-        } else {
-            Some(ram_snapshot.clone())
-        };
-        let hash = self.rom_hash.clone();
-        let record = SaveRecord {
-            rom_hash: hash.clone(),
-            rom_title: self.title.clone(),
-            ram,
-            // Preserve the saved quick-state slot: autosave rewrites the whole
-            // record, so writing `None` here would wipe the user's quick-save.
-            quick_state: self.quick_state.clone(),
-            updated_at: js_sys::Date::now(),
-        };
-        let Some(host_rc) = self.host_rc.clone() else {
-            return;
-        };
-        crate::storage::put_record_async(&self.storage.borrow(), record, move |committed| {
-            if !committed {
-                return;
-            }
-            let Ok(mut inner) = host_rc.try_borrow_mut() else {
-                return;
-            };
-            if inner.rom_hash == hash && inner.console.cartridge().ram() == ram_snapshot {
-                inner.console.cartridge_mut().clear_ram_dirty();
-                web_sys::console::log_1(
-                    &format!("battery saved ({} KiB)", ram_snapshot.len() / 1024).into(),
-                );
-            }
-        });
-    }
-
-    /// Update the quick-state slot in IDB. `Some(bytes)` saves the slot
-    /// with that data; `None` loads the slot from IDB into the console.
-    fn write_quick_state_to_storage(&mut self, bytes: Vec<u8>) {
-        if self.rom_hash.is_empty() {
-            return;
-        }
-        let record = SaveRecord {
-            rom_hash: self.rom_hash.clone(),
-            rom_title: self.title.clone(),
-            ram: self.console.cartridge().ram().to_vec().into(),
-            quick_state: Some(bytes),
-            updated_at: js_sys::Date::now(),
-        };
-        crate::storage::put_record_async(&self.storage.borrow(), record, |_| {});
-    }
-
-    /// Load the quick-state slot. Prefers the in-memory copy: it's synchronous
-    /// and repeatable (same as the desktop frontend), so a second load of the
-    /// same save works — routing every load through an async IDB read made it
-    /// fragile, seeming to only work once. IDB is a fallback for the one case
-    /// the in-memory slot can't cover: a fresh page load before the slot has
-    /// been populated. The IDB result is cached in memory so the next load is
-    /// instant.
-    fn load_quick_state(&mut self) {
-        if let Some(qs) = self.quick_state.clone() {
-            match self.console.load_state_bytes(&qs) {
-                Ok(()) => self.set_status("loaded state"),
-                Err(e) => self.set_status(&format!("state error: {e}")),
-            }
-            return;
-        }
-        if self.rom_hash.is_empty() {
-            self.set_status("no save slot for this ROM");
-            return;
-        }
-        self.set_status("loading state…");
-        let Some(host_rc) = self.host_rc.clone() else {
-            return;
-        };
-        let storage = self.storage.clone();
-        let hash = self.rom_hash.clone();
-        crate::storage::get_record_async(&storage.borrow(), hash.clone(), move |rec| {
-            let Ok(mut inner) = host_rc.try_borrow_mut() else {
-                return;
-            };
-            if inner.rom_hash != hash {
-                return;
-            }
-            match rec.and_then(|r| r.quick_state) {
-                Some(qs) => match inner.console.load_state_bytes(&qs) {
-                    Ok(()) => {
-                        inner.quick_state = Some(qs);
-                        inner.set_status("loaded state");
-                    }
-                    Err(e) => inner.set_status(&format!("state error: {e}")),
-                },
-                None => inner.set_status("no save slot for this ROM"),
-            }
-        });
     }
 
     /// Apply a keydown event: swallow the browser's default for any key the
@@ -717,309 +547,5 @@ impl WasmHost {
                 Err(JsValue::from_str(&format!("{e}")))
             }
         }
-    }
-}
-
-impl WasmHost {
-    /// Wire the "Load ROM" button: clicking it opens a hidden `<input
-    /// type="file">`; on `change` we read the file as ArrayBuffer and hand
-    /// the bytes to `Inner::load_rom`.
-    fn wire_load_button(&self) -> Result<(), JsValue> {
-        let doc = web_sys::window()
-            .and_then(|w| w.document())
-            .ok_or_else(|| JsValue::from_str("no document"))?;
-        let button = get_html_element(&doc, "load-button")?;
-        let file_input: HtmlInputElement = get_element_by_id(&doc, "rom-input")?;
-
-        // Click on #load-button → .click() on the hidden #rom-input. The
-        // input's onchange handler then runs as if the user had picked a
-        // file from the OS file dialog.
-        let input_for_click: HtmlInputElement = file_input.clone();
-        on_click(&button, move || input_for_click.click())?;
-
-        // Change on #rom-input → read file → load_rom.
-        let host_for_change: Rc<RefCell<Inner>> = self.inner.clone();
-        let file_for_change: HtmlInputElement = file_input.clone();
-        on_event(&file_input, "change", move |_event: Event| {
-            let files = match file_for_change.files() {
-                Some(f) => f,
-                None => return,
-            };
-            if files.length() == 0 {
-                return;
-            }
-            let file = match files.get(0) {
-                Some(f) => f,
-                None => return,
-            };
-            let reader = web_sys::FileReader::new().unwrap();
-            let host_for_reader = host_for_change.clone();
-            let reader_closure = Closure::wrap(Box::new(move |ev: Event| {
-                let reader: web_sys::FileReader = match ev
-                    .target()
-                    .and_then(|t| t.dyn_into::<web_sys::FileReader>().ok())
-                {
-                    Some(r) => r,
-                    None => return,
-                };
-                let buffer = match reader.result() {
-                    Ok(b) => b,
-                    Err(_) => return,
-                };
-                let array: js_sys::ArrayBuffer = match buffer.dyn_into() {
-                    Ok(a) => a,
-                    Err(_) => return,
-                };
-                let bytes = js_sys::Uint8Array::new(&array);
-                let mut vec = vec![0u8; bytes.length() as usize];
-                bytes.copy_to(&mut vec);
-                host_for_reader.borrow_mut().load_rom(&vec);
-            }) as Box<dyn FnMut(Event)>);
-            reader
-                .add_event_listener_with_callback("load", reader_closure.as_ref().unchecked_ref())
-                .unwrap();
-            // Unlike the one-shot startup listeners, this reader is rebuilt on
-            // every file pick, so it's parked in a field (and replaced next
-            // time) rather than leaked — otherwise each ROM load would leak a
-            // closure. Dropping it would invalidate the callback before `load`.
-            host_for_change.borrow_mut().rom_reader_closure = Some(reader_closure);
-
-            if let Err(e) = reader.read_as_array_buffer(&file) {
-                weblog::error_val("could not read the selected ROM file", &e);
-            }
-        })?;
-        Ok(())
-    }
-
-    /// Start the requestAnimationFrame loop. Each tick advances the console
-    /// by one frame and blits the framebuffer to the canvas.
-    fn start_render_loop(&self) -> Result<(), JsValue> {
-        let inner = self.inner.clone();
-        let raf_slot: RafSlot = Rc::new(RefCell::new(None));
-        let slot_for_cb = raf_slot.clone();
-        *raf_slot.borrow_mut() = Some(Closure::wrap(Box::new(move || {
-            // Drain any queued meta actions before stepping, so a save
-            // requested on the previous frame's idle still lands. The
-            // actual save/load/screenshot handlers live on `WasmHost`; we
-            // need a second `Rc<RefCell>` clone for them.
-            {
-                let mut inner = inner.borrow_mut();
-                inner.step_and_present();
-            }
-            let window = match web_sys::window() {
-                Some(w) => w,
-                None => return,
-            };
-            let slot = slot_for_cb.borrow();
-            if let Some(c) = slot.as_ref() {
-                let _ = window.request_animation_frame(c.as_ref().unchecked_ref());
-            }
-        }) as Box<dyn FnMut()>));
-        // Stash the slot in Inner so the closure is dropped only with the
-        // host (i.e. never, for the page's lifetime).
-        self.inner.borrow_mut().raf_slot = raf_slot.clone();
-
-        let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
-        let slot = raf_slot.borrow();
-        let closure = slot
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("raf closure not set"))?;
-        window.request_animation_frame(closure.as_ref().unchecked_ref())?;
-        Ok(())
-    }
-
-    /// Bind keydown/keyup to the window, and a blur handler that drops
-    /// every key. The blur matters because if the user alt-tabs out with a
-    /// direction held, the browser won't fire `keyup` for it, and the
-    /// emulated character would keep walking.
-    fn wire_keyboard(&self) -> Result<(), JsValue> {
-        let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
-        let host_for_kd: Rc<RefCell<Inner>> = self.inner.clone();
-        on_event(&window, "keydown", move |ev: KeyboardEvent| {
-            host_for_kd.borrow_mut().on_keydown(&ev);
-        })?;
-
-        let host_for_ku: Rc<RefCell<Inner>> = self.inner.clone();
-        on_event(&window, "keyup", move |ev: KeyboardEvent| {
-            host_for_ku.borrow_mut().on_keyup(&ev);
-        })?;
-
-        let host_for_blur: Rc<RefCell<Inner>> = self.inner.clone();
-        on_event(&window, "blur", move |_ev: Event| {
-            host_for_blur.borrow_mut().on_blur();
-        })?;
-        Ok(())
-    }
-
-    /// Wire the small toolbar buttons (Pause, Reset, Cycle palette,
-    /// Screenshot, Enable audio). Each is a one-line `click` handler
-    /// that flips a flag on `Inner`; the rAF loop acts on the flag.
-    /// The audio button is the odd one out: it's the only one that
-    /// needs to mutate its own label after the first click.
-    fn wire_control_buttons(&self) -> Result<(), JsValue> {
-        let doc = web_sys::window()
-            .and_then(|w| w.document())
-            .ok_or_else(|| JsValue::from_str("no document"))?;
-
-        // Pause — toggles the `paused` field. The rAF loop still runs
-        // (so the canvas keeps repainting), it just skips `run_frame`.
-        let host_pause: Rc<RefCell<Inner>> = self.inner.clone();
-        on_click(&get_html_element(&doc, "pause-button")?, move || {
-            let mut h = host_pause.borrow_mut();
-            h.paused = !h.paused;
-            let state = if h.paused { "paused" } else { "running" };
-            h.set_status(state);
-        })?;
-
-        // Reset — same effect as the DMG power-on sequence.
-        let host_reset: Rc<RefCell<Inner>> = self.inner.clone();
-        on_click(&get_html_element(&doc, "reset-button")?, move || {
-            host_reset.borrow_mut().reset_pending = true;
-        })?;
-
-        // Cycle palette — same as pressing Digit3.
-        let host_pal: Rc<RefCell<Inner>> = self.inner.clone();
-        on_click(&get_html_element(&doc, "palette-button")?, move || {
-            host_pal.borrow_mut().palette_pending = true;
-        })?;
-
-        // Screenshot — same as pressing Digit2.
-        let host_shot: Rc<RefCell<Inner>> = self.inner.clone();
-        on_click(&get_html_element(&doc, "screenshot-button")?, move || {
-            host_shot.borrow_mut().screenshot_pending = true;
-        })?;
-
-        // Audio toggle. Reuses a single AudioContext across toggles (built once,
-        // asynchronously, on first enable — Web Audio requires a user gesture),
-        // then suspend/resume. See `start_audio` / `stop_audio`.
-        let host_audio: Rc<RefCell<Inner>> = self.inner.clone();
-        let audio_btn: web_sys::HtmlElement = get_html_element(&doc, "audio-button")?;
-        let audio_btn_for_cb: web_sys::HtmlElement = audio_btn.clone();
-        on_click(&audio_btn, move || {
-            let enabled = host_audio.borrow().audio_enabled;
-            let btn = Some(audio_btn_for_cb.clone());
-            if enabled {
-                stop_audio(&host_audio, btn);
-            } else {
-                start_audio(&host_audio, btn);
-            }
-        })?;
-        Ok(())
-    }
-}
-
-/// Restore a ROM's saved RAM + quick-state from IDB into the console. The async
-/// reply re-checks that the live ROM (`inner.rom_hash`) *and* the record's hash
-/// still equal `hash` before applying anything, so a slow reply for ROM A can't
-/// clobber a since-loaded ROM B.
-fn restore_save(
-    host_rc: &Rc<RefCell<Inner>>,
-    storage: &Rc<RefCell<Option<IdbDatabase>>>,
-    hash: String,
-) {
-    let host_rc = host_rc.clone();
-    let storage_owned = storage.clone();
-    crate::storage::get_record_async(&storage.borrow(), hash.clone(), move |rec| {
-        let mut inner = match host_rc.try_borrow_mut() {
-            Ok(inner) => inner,
-            Err(_) => {
-                // Inner is momentarily borrowed. This shouldn't happen — the
-                // reply fires between event-loop tasks, when no borrow is held —
-                // but if it does, retry on the next microtask rather than
-                // silently dropping the restore (and losing the save).
-                let (h, s, hash) = (host_rc.clone(), storage_owned.clone(), hash.clone());
-                wasm_bindgen_futures::spawn_local(async move { restore_save(&h, &s, hash) });
-                return;
-            }
-        };
-        if inner.rom_hash != hash {
-            return; // a different ROM is loaded now — discard this late reply
-        }
-        let Some(rec) = rec else { return };
-        if rec.rom_hash != hash {
-            return; // record is for another ROM — discard
-        }
-        if let Some(ram) = &rec.ram {
-            inner.console.cartridge_mut().load_ram(ram);
-        }
-        if let Some(qs) = &rec.quick_state {
-            if let Err(e) = inner.console.load_state_bytes(qs) {
-                weblog::error(&format!("saved quick-state could not be restored: {e}"));
-            }
-        }
-        inner.quick_state = rec.quick_state.clone();
-        inner.set_status("restored save");
-    });
-}
-
-/// Start (or resume) audio. Sets the enabled flag + relabels the button
-/// optimistically, then either resumes the existing context or builds one
-/// asynchronously (`AudioWorklet.addModule` is a promise). Building is
-/// fire-and-forget: until it resolves, the rAF loop's audio feed simply finds
-/// no player yet and skips — emulation is unaffected.
-fn start_audio(host: &Rc<RefCell<Inner>>, label: Option<web_sys::HtmlElement>) {
-    {
-        let mut h = host.borrow_mut();
-        if h.audio_enabled {
-            return;
-        }
-        h.audio_enabled = true;
-        h.set_status("audio: on");
-        if let Some(btn) = &label {
-            btn.set_text_content(Some("Disable audio"));
-        }
-        if let Some(player) = h.audio.as_ref() {
-            if let Err(e) = player.resume() {
-                weblog::error_val("audio: failed to resume the AudioContext", &e);
-            }
-            return;
-        }
-    }
-    // No graph yet — build it off the borrow (async).
-    let source_rate = host.borrow().console.audio_output_rate();
-    let host = host.clone();
-    wasm_bindgen_futures::spawn_local(async move {
-        match crate::audio::enable(source_rate).await {
-            Ok(player) => {
-                let mut h = host.borrow_mut();
-                // The user may have toggled audio off while the graph was
-                // loading; honour the current flag, but keep the player for reuse.
-                if h.audio_enabled {
-                    if let Err(e) = player.resume() {
-                        weblog::error_val("audio: failed to resume the AudioContext", &e);
-                    }
-                } else {
-                    let _ = player.suspend();
-                }
-                h.audio = Some(player);
-            }
-            Err(e) => {
-                weblog::error_val("audio init failed", &e);
-                let mut h = host.borrow_mut();
-                h.audio_enabled = false;
-                h.set_status("audio: init failed");
-                if let Some(btn) = &label {
-                    btn.set_text_content(Some("Enable audio"));
-                }
-            }
-        }
-    });
-}
-
-/// Suspend audio (disable). The rAF loop keeps driving emulation regardless.
-fn stop_audio(host: &Rc<RefCell<Inner>>, label: Option<web_sys::HtmlElement>) {
-    let mut h = host.borrow_mut();
-    if !h.audio_enabled {
-        return;
-    }
-    if let Some(player) = h.audio.as_ref() {
-        if let Err(e) = player.suspend() {
-            weblog::error_val("audio: failed to suspend the AudioContext", &e);
-        }
-    }
-    h.audio_enabled = false;
-    h.set_status("audio: off");
-    if let Some(btn) = &label {
-        btn.set_text_content(Some("Enable audio"));
     }
 }

@@ -52,7 +52,7 @@ These files live under `crates/rgametoy-core/tests/` (paths below are shortened)
 | `tests/joypad_test.rs` | P1 select mapping, interrupt gated by select, release/select-exposes-held-button edges |
 | `tests/apu_test.rs` | four channels, envelope/sweep/length, DAC; plus the obscure length/sweep/power quirks (dmg_sound 03/05/08/11) pinned directly via NR52, each verified to fail if its fix is reverted |
 | `tests/cartridge_test.rs` / `save_test.rs` | MBC, battery saves |
-| `tests/savestate_test.rs` / `savestate_bytes_test.rs` (`--features serialize`) | save-state byte round-trip (re-serialize equality, lockstep, atomic reject) |
+| `tests/save_state_test.rs` / `save_state_bytes_test.rs` (`--features serialize`) | save-state byte round-trip (re-serialize equality, lockstep, atomic reject) |
 | `tests/serial_test.rs` / `rom_render_test.rs` | serial capture, whole-frame rendering |
 | `tests/common/mod.rs` | shared scaffolding (black-box PPU helpers + ROM runner), pulled in per file via `mod common;` |
 

@@ -157,7 +157,8 @@ pub struct Ppu {
     scy: u8,  // 0xFF42
     scx: u8,  // 0xFF43
     lyc: u8,  // 0xFF45
-    dma: u8,  // 0xFF46
+    // 0xFF46 (OAM DMA) is not a PPU register: the DMA unit is a bus master
+    // owned by `System`, which also holds the register's read-back value.
     bgp: u8,  // 0xFF47
     obp0: u8, // 0xFF48
     obp1: u8, // 0xFF49
@@ -216,7 +217,6 @@ impl Ppu {
             scy: 0,
             scx: 0,
             lyc: 0,
-            dma: 0,
             bgp: 0,
             obp0: 0,
             obp1: 0,
@@ -790,9 +790,9 @@ impl Ppu {
         }
     }
 
-    /// Read a PPU register (0xFF40-0xFF4B). The STAT (0xFF41) mode bits
-    /// deliberately report the *visible* mode, which lags the internal one by a
-    /// few dots.
+    /// Read a PPU register (0xFF40-0xFF4B, except 0xFF46 which belongs to the
+    /// `System`-owned DMA unit). The STAT (0xFF41) mode bits deliberately
+    /// report the *visible* mode, which lags the internal one by a few dots.
     pub fn read_register(&self, addr: u16) -> u8 {
         match addr {
             0xFF40 => self.lcdc,
@@ -805,7 +805,6 @@ impl Ppu {
             0xFF43 => self.scx,
             0xFF44 => self.ly,
             0xFF45 => self.lyc,
-            0xFF46 => self.dma,
             0xFF47 => self.bgp,
             0xFF48 => self.obp0,
             0xFF49 => self.obp1,
@@ -815,9 +814,9 @@ impl Ppu {
         }
     }
 
-    /// Write a PPU register (0xFF40-0xFF4B). Toggling LCDC bit 7 turns the LCD
-    /// on/off (resetting or freezing the timing); STAT/LYC writes can raise a
-    /// STAT interrupt.
+    /// Write a PPU register (0xFF40-0xFF4B, except 0xFF46 — the bus routes DMA
+    /// writes to `System`). Toggling LCDC bit 7 turns the LCD on/off (resetting
+    /// or freezing the timing); STAT/LYC writes can raise a STAT interrupt.
     pub fn write_register(&mut self, addr: u16, value: u8) {
         match addr {
             0xFF40 => {
@@ -869,7 +868,6 @@ impl Ppu {
                     self.refresh_stat_after_write();
                 }
             }
-            0xFF46 => self.dma = value,
             0xFF47 => self.bgp = value,
             0xFF48 => self.obp0 = value,
             0xFF49 => self.obp1 = value,
@@ -909,7 +907,6 @@ impl Ppu {
         write_u8(out, self.scy);
         write_u8(out, self.scx);
         write_u8(out, self.lyc);
-        write_u8(out, self.dma);
         write_u8(out, self.bgp);
         write_u8(out, self.obp0);
         write_u8(out, self.obp1);
@@ -986,7 +983,6 @@ impl Ppu {
         self.scy = r.read_u8()?;
         self.scx = r.read_u8()?;
         self.lyc = r.read_u8()?;
-        self.dma = r.read_u8()?;
         self.bgp = r.read_u8()?;
         self.obp0 = r.read_u8()?;
         self.obp1 = r.read_u8()?;

@@ -73,9 +73,12 @@ impl std::error::Error for SaveStateError {}
 /// Current save state format version. Bump whenever the on-disk layout changes,
 /// including when fields are appended: readers require the payload to be
 /// consumed exactly so malformed or cross-version trailing data is rejected.
-pub const SAVE_STATE_VERSION: u8 = 1;
+///
+/// History: v2 = the 0xFF46 DMA register moved out of the PPU's serialized
+/// register block (the DMA unit is owned by the system, not the PPU).
+pub const SAVE_STATE_VERSION: u8 = 2;
 
-/// File magic ("RGSV" = "rgametoy save (v1)"). Prepended to every blob.
+/// File magic ("RGSV" = "rgametoy save"). Prepended to every blob.
 pub const SAVE_STATE_MAGIC: [u8; 4] = *b"RGSV";
 
 /// Standard CRC-32 with the IEEE polynomial (used by zip/ethernet/etc.),

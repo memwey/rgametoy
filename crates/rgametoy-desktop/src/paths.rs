@@ -22,14 +22,15 @@ pub fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// `<data-dir>/saves`.
-pub fn saves_dir() -> PathBuf {
-    data_dir().join("saves")
+/// `<base>/saves` — `base` is the emulator's configured data directory
+/// (see [`data_dir`], or the override passed to `Emulator::set_data_dir`).
+pub fn saves_dir(base: &Path) -> PathBuf {
+    base.join("saves")
 }
 
-/// `<data-dir>/screenshots`.
-pub fn screenshots_dir() -> PathBuf {
-    data_dir().join("screenshots")
+/// `<base>/screenshots`.
+pub fn screenshots_dir(base: &Path) -> PathBuf {
+    base.join("screenshots")
 }
 
 /// FNV-1a 32-bit hash of the ROM bytes, as 8 lowercase hex digits — the

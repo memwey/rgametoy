@@ -56,6 +56,8 @@ Accuracy is measured with community test ROMs. `docs/testing.md` (EN) and
   zero of them and would miss a serialization regression. Also run the ROM suite
   when the change could affect accuracy. A new accuracy fix should add a targeted
   test and ratchet the now-passing ROM tests so they can't silently regress.
+  `.github/workflows/ci.yml` runs the five clippy/test steps on every push and
+  PR (the ROM suite stays local-only, gated on `GB_TEST_ROMS`).
 
 ## Code Style
 * Idiomatic Rust; match the surrounding code's naming, comment density, and idiom.

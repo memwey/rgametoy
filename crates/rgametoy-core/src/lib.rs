@@ -4,8 +4,9 @@
 //! This crate is deterministic and free of host I/O — no window, audio device,
 //! filesystem, or wall-clock. It exposes [`Console`]: feed it a cartridge, call
 //! [`Console::run_frame`], read back the framebuffer / audio samples, and hand
-//! it button state. A frontend (the `rgametoy-desktop` crate, or a future web
-//! one) supplies the host I/O. Being dependency-free, it compiles to `wasm32`.
+//! it button state. A frontend (the `rgametoy-desktop` or `rgametoy-web`
+//! crate) supplies the host I/O. Being dependency-free, it compiles to
+//! `wasm32`.
 
 pub mod apu;
 pub mod bus;

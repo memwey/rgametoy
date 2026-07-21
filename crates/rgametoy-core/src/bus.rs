@@ -40,7 +40,10 @@ pub struct System {
     /// does not begin the transfer immediately: there is a one-M-cycle idle gap
     /// (OAM stays accessible) before the busy window opens.
     dma_delay: u8,
-    /// High byte of the pending/active DMA source address (`FF46` value).
+    /// High byte of the pending/active DMA source address — i.e. the 0xFF46
+    /// register itself, which the DMA unit owns (it is a bus master, not part
+    /// of the PPU, so the register lives here rather than in the PPU's
+    /// register file).
     dma_source: u8,
     if_register: u8, // Interrupt Flag register (0xFF0F)
     ie_register: u8, // Interrupt Enable register (0xFFFF)
@@ -164,6 +167,10 @@ fn read_raw(sys: &System, cart: &Cartridge, addr: u16) -> u8 {
         0xFF04..=0xFF07 => sys.timer.read_register(addr),
         0xFF0F => sys.if_register | 0xE0, // top 3 bits read as 1
         0xFF10..=0xFF3F => sys.apu.read_register(addr),
+        // 0xFF46 is the DMA unit's register, owned by the system (see the
+        // `dma_source` field) — it sits in the PPU's address range but is not
+        // a PPU register.
+        0xFF46 => sys.dma_source,
         0xFF40..=0xFF4B => sys.ppu.read_register(addr),
         0xFF03 | 0xFF08..=0xFF0E | 0xFF4C..=0xFF7F => 0xFF,
         0xFF80..=0xFFFE => sys.hram.read_byte(addr),
@@ -272,7 +279,6 @@ impl Bus for BusView<'_> {
             0xFF0F => self.sys.if_register = value & 0x1F,
             0xFF10..=0xFF3F => self.sys.apu.write_register(addr, value),
             0xFF46 => {
-                self.sys.ppu.write_register(addr, value);
                 // Request an OAM DMA. It does not start now: an idle M-cycle
                 // passes before the busy window opens. A request while a
                 // previous transfer runs lets that one keep blocking until the

@@ -162,6 +162,19 @@ impl Cartridge {
         Self::classify(type_byte).is_some()
     }
 
+    /// Human-readable name of the MBC a cartridge-type byte selects, for
+    /// frontend startup banners. Derived from `classify`, so it can never
+    /// drift from what the core actually emulates.
+    pub fn type_name(type_byte: u8) -> &'static str {
+        match Self::classify(type_byte) {
+            Some(MbcKind::None) => "ROM only",
+            Some(MbcKind::Mbc1) => "MBC1",
+            Some(MbcKind::Mbc3) => "MBC3",
+            Some(MbcKind::Mbc5) => "MBC5",
+            None => "unknown",
+        }
+    }
+
     /// Whether this cartridge persists its external RAM (has a battery).
     pub fn has_battery(&self) -> bool {
         self.has_battery && !self.ram.is_empty()

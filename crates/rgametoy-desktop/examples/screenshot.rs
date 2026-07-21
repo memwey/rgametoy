@@ -3,7 +3,7 @@
 //!
 //! Run with: `cargo run --example screenshot -- rom.gb out.bmp [frames]`
 //!
-//! The BMP encoding is shared with the interactive emulator's F2 screenshot
+//! The BMP encoding is shared with the interactive emulator's "2"-key screenshot
 //! (`rgametoy_desktop::screenshot`), so both produce identical images.
 
 use rgametoy_core::cartridge::Cartridge;
