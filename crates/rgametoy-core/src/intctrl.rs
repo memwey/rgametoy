@@ -70,7 +70,11 @@ impl IntCtrl {
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
         self.if_register = r.read_u8()?;
         self.ie_register = r.read_u8()?;
-        if self.if_register & !0x1F != 0 || self.ie_register & !0x1F != 0 {
+        // Only IF has an invariant to check: `write` masks it to its five
+        // lines, so anything outside that range means a corrupt blob. IE has
+        // no unused bits — all eight are plain writable storage that reads
+        // back verbatim, so every byte is a legal IE value.
+        if self.if_register & !0x1F != 0 {
             return Err(SaveStateError::Corrupt);
         }
         Ok(())

@@ -76,7 +76,10 @@ impl std::error::Error for SaveStateError {}
 ///
 /// History: v2 = the 0xFF46 DMA register moved out of the PPU's serialized
 /// register block (the DMA unit is owned by the system, not the PPU).
-pub const SAVE_STATE_VERSION: u8 = 2;
+/// v3 = the CPU's `ei_was_pending` bit joined the block: `EI`'s promotion is
+/// decided across an instruction boundary, so that bit is live at exactly the
+/// point a save state is taken and cannot be re-derived from `ime_pending`.
+pub const SAVE_STATE_VERSION: u8 = 3;
 
 /// File magic ("RGSV" = "rgametoy save"). Prepended to every blob.
 pub const SAVE_STATE_MAGIC: [u8; 4] = *b"RGSV";

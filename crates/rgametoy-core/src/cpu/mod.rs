@@ -105,9 +105,12 @@ pub struct Cpu {
     /// serialized — so the queue is never cloned or written to a save state.
     ops: VecDeque<MicroOp>,
     /// Whether an `EI` from the *previous* instruction is still waiting to take
-    /// effect, captured at the start of the instruction now running. Transient;
-    /// re-derived from `ime_pending` at each instruction boundary, never
-    /// serialized.
+    /// effect, captured at the start of the instruction now running. Together
+    /// with `ime_pending` this is what makes `EI`'s promotion fire one
+    /// instruction late, and it is live *across* an instruction boundary — so
+    /// it is part of the machine's state, cloned and serialized like `ime`. (It
+    /// cannot be re-derived on load: it holds `ime_pending` as it stood at the
+    /// *previous* boundary, which the current value has already overwritten.)
     ei_was_pending: bool,
 }
 
@@ -128,7 +131,7 @@ impl Clone for Cpu {
             tmp8: self.tmp8,
             tmp16: self.tmp16,
             ops: VecDeque::new(),
-            ei_was_pending: false,
+            ei_was_pending: self.ei_was_pending,
         }
     }
 }
@@ -501,14 +504,15 @@ impl Default for Cpu {
 // -- Save state -------------------------------------------------------------
 
 impl Cpu {
-    /// Append the CPU state: 12 bytes of registers, then six flag/control
-    /// bytes (`ime`, `ime_pending`, `halted`, `halt_bug`, `locked`,
-    /// `cycles`). Order must match [`Self::read_state`].
+    /// Append the CPU state: 12 bytes of registers, then seven flag/control
+    /// bytes (`ime`, `ime_pending`, `ei_was_pending`, `halted`, `halt_bug`,
+    /// `locked`, `cycles`). Order must match [`Self::read_state`].
     #[cfg(feature = "serialize")]
     pub fn write_state(&self, out: &mut Vec<u8>) {
         self.registers.write_state(out);
         write_bool(out, self.ime);
         write_bool(out, self.ime_pending);
+        write_bool(out, self.ei_was_pending);
         write_bool(out, self.halted);
         write_bool(out, self.halt_bug);
         write_bool(out, self.locked);
@@ -520,6 +524,7 @@ impl Cpu {
         self.registers.read_state(r)?;
         self.ime = r.read_bool()?;
         self.ime_pending = r.read_bool()?;
+        self.ei_was_pending = r.read_bool()?;
         self.halted = r.read_bool()?;
         self.halt_bug = r.read_bool()?;
         self.locked = r.read_bool()?;

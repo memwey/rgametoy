@@ -195,3 +195,54 @@ fn loaded_state_runs_a_full_first_frame_even_if_snapshot_was_frame_ready() {
         "first frame after a frame-ready snapshot must still run a full frame"
     );
 }
+
+/// `EI` enables IME one instruction late, and that "one instruction" is tracked
+/// across an instruction boundary — the exact point a save state is taken. A
+/// round-trip inside that window must not shift when the interrupt dispatches.
+#[test]
+fn ei_delay_survives_a_save_state_round_trip() {
+    /// `EI; NOP; …` with a VBlank interrupt already latched, stepped three
+    /// times; returns PC (0x0040 once the dispatch happens). With
+    /// `round_trip`, a save state is taken and reloaded after step 2 — while
+    /// EI's promotion is still pending.
+    fn run(round_trip: bool) -> u16 {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0100..0x0105].copy_from_slice(&[0xFB, 0x00, 0x00, 0x00, 0x00]); // EI; NOP×4
+        let mut c = Console::new();
+        c.power_on(Cartridge::from_bytes(rom));
+        c.write_mem(0xFF40, 0x00); // LCD off, so the PPU raises nothing itself
+        c.write_mem(0xFFFF, 0x01); // IE = VBlank
+        c.write_mem(0xFF0F, 0x01); // IF = VBlank latched
+
+        c.step(); // EI
+        c.step(); // NOP — the promotion is now due at the next boundary
+        if round_trip {
+            let blob = c.save_state_bytes();
+            c.load_state_bytes(&blob).expect("load");
+        }
+        c.step(); // dispatches the interrupt
+        c.cpu().get_pc()
+    }
+
+    assert_eq!(run(false), 0x0040, "baseline: dispatch on the third step");
+    assert_eq!(
+        run(true),
+        0x0040,
+        "a save state taken in the EI delay window delayed the dispatch"
+    );
+}
+
+/// IE (0xFFFF) is a plain 8-bit register — its top 3 bits are writable and read
+/// back — so a state holding any IE value must reload, not be judged corrupt.
+#[test]
+fn ie_with_high_bits_set_survives_a_save_state_round_trip() {
+    let mut a = new_console();
+    a.write_mem(0xFFFF, 0xFF);
+    assert_eq!(a.read_mem(0xFFFF), 0xFF, "IE reads back all 8 bits");
+    let blob = a.save_state_bytes();
+
+    let mut b = new_console();
+    b.load_state_bytes(&blob)
+        .expect("IE with high bits set must load");
+    assert_eq!(b.read_mem(0xFFFF), 0xFF, "IE restored verbatim");
+}
