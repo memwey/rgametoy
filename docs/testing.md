@@ -50,6 +50,7 @@ These files live under `crates/rgametoy-core/tests/` (paths below are shortened)
 | `tests/cpu_timing_test.rs` | golden per-opcode T-cycle counts (all 512 opcodes) + both paths of every conditional — the local stand-in for Blargg `mem_timing` when `GB_TEST_ROMS` is unset |
 | `tests/timer_test.rs` | 16-bit counter, four frequencies, falling-edge glitches (TAC/DIV), the three-state reload delay |
 | `tests/dma_test.rs` | OAM DMA start delay, source-bus blocking (VRAM/external), echo source, I/O readable |
+| `tests/timer_test.rs::post_boot_div_*` | the post-boot DIV seed and its phase (§3.10), guarded without the ROM bundle |
 | `tests/joypad_test.rs` | P1 select mapping, interrupt gated by select, release/select-exposes-held-button edges |
 | `tests/apu_test.rs` | four channels, envelope/sweep/length, DAC; plus the obscure length/sweep/power quirks (dmg_sound 03/05/08/11) pinned directly via NR52, each verified to fail if its fix is reverted |
 | `tests/cartridge_test.rs` / `save_test.rs` | MBC, battery saves |
@@ -129,9 +130,14 @@ A few judging details:
 ## 2. Scoreboard
 
 > Data for the current `dev` branch, **re-verified after the crystal-driven
-> rework** (ROM suite, dmg-acid2 and mealybug all re-run — scores unchanged).
-> The core CPU is **cycle-accurate to the M-cycle**, driven from a master clock
-> (`Console::step`), the CPU ticked as a peer one micro-op per M-cycle.
+> rework** (ROM suite, dmg-acid2 and mealybug all re-run — scores unchanged by
+> the rework itself). The core CPU is **cycle-accurate to the M-cycle**, driven
+> from a master clock (`Console::step`), the CPU ticked as a peer one micro-op
+> per M-cycle.
+>
+> Since then, seeding the post-boot DIV (§3.10) moved mooneye 63→**64/75** and
+> gbmicrotest 324→**333/513**; dmg-acid2 stayed byte-identical and mealybug
+> stayed 1/24.
 
 ### 2.1 Blargg — all pass ✅
 
@@ -146,7 +152,7 @@ A few judging details:
 Renders the full reference smiley (byte-identical before/after the FIFO rewrite,
 evidence the rendering is correct).
 
-### 2.3 mooneye acceptance — 63 / 75 (every non-boot test passes ✅)
+### 2.3 mooneye acceptance — 64 / 75 (every non-boot test passes ✅)
 
 | Group | Score | Notes |
 |---|---|---|
@@ -159,10 +165,10 @@ evidence the rendering is correct).
 | serial | 0/1 | `boot_sclk_align` (needs boot timing, out of scope) |
 | root | 30/41 | only the boot class left (§3.8); the control-flow read/write-timing cluster passes (§3.1) |
 
-The remaining 12 failures are **all boot state** (11 boot tests + `boot_sclk_align`):
+The remaining 11 failures are **all boot state** (10 boot tests + `boot_sclk_align`):
 they check the post-boot register/IO/DIV state of **specific models** — we only do
 DMG and don't run a real boot ROM, so they are out of scope (the real DMG variants
-`*-dmgABC` pass). See §3.8.
+`*-dmgABC` pass, including `boot_div-dmgABCmgb` since §3.10). See §3.8.
 
 ### 2.4 mealybug tearoom (DMG) — 1 / 24 pass, per-pixel similarity quantified
 
@@ -222,6 +228,32 @@ is playing hits the byte the channel is currently reading, within a tight
 timing window. That needs cycle-exact wave-read timing and is the hardest APU
 cluster; not yet attacked.
 
+### 2.6 GBMicrotest — 333 / 513 pass
+
+Hundreds of very small, very sharp probes (`aappleby/GBMicrotest`). Results go to
+`0xFF80-0xFF82`; **only `0xFF82` is meaningful** (`0x01` pass / `0xFF` fail) —
+`0xFF80`/`0xFF81` hold actual/expected but aren't written consistently, including
+on failure. Ratcheted by `rom_suite::gbmicrotest_known_passing` the same way as
+`dmg_sound`: the passing set is listed so it can't silently regress, the failures
+are documented not asserted.
+
+The failure *shape* is what this suite is worth — it says where the remaining
+inaccuracy actually lives:
+
+| Cluster | Count | Read |
+|---|---|---|
+| `hblank_int_*` / `int_hblank_*` | 61 | STAT-mode-0 interrupt dot, per SCX — the same dot-exactness mealybug wants |
+| `line_153_*` | 11 | the LY=153→0 line-153 quirk |
+| `stat_write_*` / `poweron_stat_*` | 20 | STAT write glitch + power-on STAT |
+| `lcdon_to_*` | 8 | LCD-enable timing (§3.4 territory) |
+| `poweron_*` (all) | ~25 | need a real boot ROM — **out of scope**, like mooneye's `boot*` |
+| everything else | rest | scattered PPU/interrupt timing |
+
+Two things to take from it. First, **the CPU is not the bottleneck**: after the
+post-boot DIV fix (§3.10) there are no CPU-side failures left — every remaining
+in-scope failure is PPU/STAT timing. Second, ~32 tests never write a verdict in
+the 8 frames we give them; they count as not-passing, not as failures.
+
 ---
 
 ## 3. Open issues and key fixes
@@ -229,7 +261,9 @@ cluster; not yet attacked.
 In one line: **every non-boot mooneye test passes** — the acceptance tests at both
 M-cycle and dot/T granularity are in place. What's left is the boot class (out of
 scope) and mealybug (the **exact latch dot** of mid-mode-3 effects, the strictest
-suite). Below, per subsystem: how it was fixed / what was learned, so the method
+suite). GBMicrotest (§2.6) says the same thing from a second angle: its ~130
+in-scope failures are *all* PPU/STAT timing, with no CPU-side failure left.
+Below, per subsystem: how it was fixed / what was learned, so the method
 can be reused for the mealybug push.
 
 > **Clock model (2026): the machine is now crystal-driven.** `Console::step` is the
@@ -420,7 +454,7 @@ not to repeat them:
 ### 3.8 Boot state (out of scope)
 `boot_regs`/`boot_div`/`boot_hwio`'s `dmg0/mgb/sgb/sgb2` variants and `boot_sclk_align`
 check specific models' post-boot state; we only do DMG and don't run a real boot ROM.
-The real DMG variants (`*-dmgABC`) pass.
+The real DMG variants (`*-dmgABC`) pass — including `boot_div-dmgABCmgb` since §3.10.
 
 ### 3.9 APU obscure corners (`dmg_sound` 9/12)
 
@@ -482,6 +516,64 @@ STAT-mode lag: 4 dots out of scan/blank, 1 dot out of Drawing
 > the whole CPU T-by-T.
 
 ---
+
+### 3.10 Post-boot DIV — fixed: the counter is not 0 at the 0x0100 hand-off
+
+Found by chasing gbmicrotest `halt_bug`, which looked like a CPU bug and wasn't.
+
+`halt_bug` sums TIMA across four reads 12 T-cycles apart, with TAC=`%101` (a
+16-T period), around a HALT that triggers the halt bug. We returned 22, expected
+20. Tracing it showed the halt bug itself was **correct** — `halt`+`inc`+`inc` is
+12 T and PC does repeat — but our TIMA increments were landing at the wrong
+*absolute* cycles. Two of the four samples fell on the wrong side of a tick.
+
+The cause: the 16-bit system counter free-runs from power-on, so by the time the
+boot ROM hands control to the cartridge it has been counting for the boot ROM's
+entire execution. **DIV reads 0xAB at 0x0100, not 0.** We bypass the boot ROM
+(`Console::power_cycle` injects post-boot state instead), and DIV was the one
+piece of that state nobody had placed — it can't go in the MMIO table, because a
+store to 0xFF04 *resets* the counter rather than setting it. Hence
+`Timer::seed_post_boot_div`, called from `initialize_post_boot_state`.
+
+Pinning the value: gbmicrotest `poweron_div_000/004/005` bracket it to
+`0xABC8..=0xABCB` (DIV must still read 0xAB 16 T in and 0xAC by 20), and
+`halt_bug` narrows that to `0xABC9..=0xABCB`. Every value in the window also
+passes mooneye `boot_div-dmgABCmgb`; nothing in the bundle separates them, so
+the midpoint `0xABCA` is used, with the window recorded at the call site.
+
+Result: mooneye 63→64/75, gbmicrotest 324→333/513, dmg-acid2 byte-identical,
+mealybug unchanged. `tests/timer_test.rs::post_boot_div_matches_...` guards it
+locally so it survives without the ROM bundle.
+
+**Lesson, and it is the same shape as the `cb_sra` one:** a failing test in
+subsystem A is not evidence of a bug in subsystem A. `halt_bug` is filed under
+HALT, exercises HALT, and had nothing wrong with HALT. What isolated it was
+noticing that the two *other* tests using the same TIMA-counter macro
+(`int_hblank_halt_bug_a`/`_b`) passed — so the counter worked, and the phase
+didn't. Look for the control that already exists in the suite before assuming
+the named subsystem is at fault.
+
+### 3.11 Video-bus arbitration is still two layers OR'd (open)
+
+VRAM/OAM access is gated in two independent places that the bus layer composes:
+`DmaController::conflicts` (is the CPU blocked by a running DMA?) and the PPU's
+`can_read_vram`/`can_read_oam` (is it blocked by the PPU's own fetching?). On
+hardware there is *one* video bus with the PPU fetcher, the DMA and the CPU
+arbitrating for it.
+
+The split already has a visible consequence: `BusView::start_oam_dma` reads its
+source through `read_raw` specifically so the DMA does not block against its own
+transfer — but `read_raw` still routes VRAM through `Ppu::read_vram`, so a
+VRAM-sourced DMA overlapping mode 3 copies 0xFF instead of tile data. Whether
+hardware agrees is **unknown and untestable with the c-sp bundle**: every OAM-DMA
+test there runs with the LCD off (gbmicrotest `dma_0x9000`, mooneye
+`oam_dma/sources-GS`) or in mode 1 (`oam_dma_start`, `oam_dma_timing`) — verified
+by instrumenting the PPU state at each transfer's start. Left as-is deliberately,
+documented at the call site; settling it needs hardware or a reference emulator.
+
+The real fix is the unified video bus, where the fetcher and the DMA are co-equal
+masters and this question must be answered explicitly, in one place — it belongs
+with the crystal-driven bus-matrix work (see the note above `Ppu`'s `can_*` gates).
 
 ## 4. Reproduce
 

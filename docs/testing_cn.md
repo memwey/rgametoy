@@ -108,8 +108,13 @@ cargo run --release --features debug -p rgametoy-core --example inspect -- rom.g
 ## 2. 用例情况(scoreboard)
 
 > 数据对应当前 `dev` 分支,**晶振驱动重构后已复验**(ROM 套件、dmg-acid2、mealybug
-> 全部重跑——分数无变化)。核心 CPU 为**逐 M-cycle 精确**,由主时钟(`Console::step`)
-> 驱动,CPU 作为平级成员每个 M-cycle 被 tick 一个微操作。
+> 全部重跑——重构本身分数无变化)。核心 CPU 为**逐 M-cycle 精确**,由主时钟
+> (`Console::step`)驱动,CPU 作为平级成员每个 M-cycle 被 tick 一个微操作。
+>
+> 此后补上 post-boot DIV(见英文版 §3.10)使 mooneye 63→**64/75**、
+> gbmicrotest 324→**333/513**;dmg-acid2 逐字节不变,mealybug 仍为 1/24。
+> 新增 **GBMicrotest** 套件(§2.6,英文版):333/513,其在范围内的失败**全部**是
+> PPU/STAT 时序,CPU 侧已无失败项。
 
 ### 2.1 Blargg —— 全过 ✅
 
@@ -123,7 +128,7 @@ cargo run --release --features debug -p rgametoy-core --example inspect -- rom.g
 
 渲染出完整参考笑脸(FIFO 重写前后字节一致,佐证渲染正确)。
 
-### 2.3 mooneye acceptance —— 63 / 75(非 boot 全过 ✅)
+### 2.3 mooneye acceptance —— 64 / 75(非 boot 全过 ✅)
 
 | 分组 | 成绩 | 备注 |
 |---|---|---|

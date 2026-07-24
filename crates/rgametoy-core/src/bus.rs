@@ -196,7 +196,21 @@ impl<'a> BusView<'a> {
         let page = if src >= 0xE0 { src - 0x20 } else { src };
         let source = (page as u16) << 8;
         for i in 0..0xA0u16 {
-            // The DMA unit's own source fetches are never blocked.
+            // `read_raw`, not `bus_read`: the DMA is the bus master here, so it
+            // does not block against its *own* transfer.
+            //
+            // It is still subject to the PPU's gate, though, because that lives
+            // inside `Ppu::read_vram`. So a VRAM-sourced transfer overlapping
+            // mode 3 copies 0xFF rather than the real tile data. That is an
+            // accident of which layer checks first, not a decision — and it is
+            // *untested*: every OAM-DMA test in the c-sp bundle runs with the
+            // LCD off (gbmicrotest `dma_0x9000`, mooneye `oam_dma/sources-GS`)
+            // or in mode 1 (mooneye `oam_dma_start`, `oam_dma_timing`), so
+            // nothing pins either answer. Settling it needs hardware or a
+            // reference emulator; until then this is left as-is deliberately.
+            // The real fix is the unified video bus (see `Ppu`'s `can_*` gates)
+            // where PPU fetcher and DMA arbitrate as co-equal masters and this
+            // question has to be answered explicitly, in one place.
             let byte = read_raw(self.soc, self.cart, source + i);
             self.soc.ppu.dma_write_oam(i as usize, byte);
         }
