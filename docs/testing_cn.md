@@ -107,7 +107,9 @@ cargo run --release --features debug -p rgametoy-core --example inspect -- rom.g
 
 ## 2. 用例情况(scoreboard)
 
-> 数据对应当前 `dev` 分支。核心 CPU 为**逐 M-cycle 精确**(每次访存/内部周期都推进外设)。
+> 数据对应当前 `dev` 分支,**晶振驱动重构后已复验**(ROM 套件、dmg-acid2、mealybug
+> 全部重跑——分数无变化)。核心 CPU 为**逐 M-cycle 精确**,由主时钟(`Console::step`)
+> 驱动,CPU 作为平级成员每个 M-cycle 被 tick 一个微操作。
 
 ### 2.1 Blargg —— 全过 ✅
 

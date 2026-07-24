@@ -128,8 +128,10 @@ A few judging details:
 
 ## 2. Scoreboard
 
-> Data for the current `dev` branch. The core CPU is **cycle-accurate to the
-> M-cycle** (every access / internal cycle advances the peripherals).
+> Data for the current `dev` branch, **re-verified after the crystal-driven
+> rework** (ROM suite, dmg-acid2 and mealybug all re-run — scores unchanged).
+> The core CPU is **cycle-accurate to the M-cycle**, driven from a master clock
+> (`Console::step`), the CPU ticked as a peer one micro-op per M-cycle.
 
 ### 2.1 Blargg — all pass ✅
 
