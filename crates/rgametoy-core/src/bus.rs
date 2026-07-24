@@ -98,6 +98,13 @@ impl Soc {
         self.intctrl.request(interrupt_type);
     }
 
+    /// Place the timer's system counter where the boot ROM would have left it.
+    /// Part of the post-boot state injection — the counter cannot be reached
+    /// through the memory map (a DIV store resets it), so it needs this seam.
+    pub(crate) fn seed_post_boot_div(&mut self) {
+        self.timer.seed_post_boot_div();
+    }
+
     /// OAM DMA state `(active, source page)` for the `debug` inspector.
     #[cfg(feature = "debug")]
     pub fn debug_dma(&self) -> (bool, u8) {

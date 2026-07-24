@@ -197,3 +197,37 @@ fn tima_overflow_reloads_from_tma_after_a_delay_and_interrupts() {
     assert!(irq, "interrupt fires when TIMA reloads");
     assert_eq!(t.read_register(0xFF05), 0x42, "TIMA reloaded from TMA");
 }
+
+/// The system counter free-runs through the boot ROM, so a cartridge starts
+/// executing with DIV already at 0xAB — not 0. We bypass the boot ROM, so
+/// `Console` seeds the counter instead; getting this wrong puts every later
+/// TIMA increment at the wrong absolute cycle. Pinned by gbmicrotest
+/// `poweron_div_*` / `halt_bug` and mooneye `boot_div-dmgABCmgb`, none of which
+/// can run without the ROM bundle — hence this local guard.
+#[test]
+fn post_boot_div_matches_what_the_boot_rom_leaves_behind() {
+    use rgametoy_core::cartridge::Cartridge;
+    use rgametoy_core::Console;
+
+    /// A console at the 0x0100 hand-off, run for `t` T-cycles (ROM is all NOPs,
+    /// so `step` advances in exact 4-T units).
+    fn div_after(t: u64) -> u8 {
+        let mut c = Console::new();
+        c.power_on(Cartridge::from_bytes(vec![0u8; 0x8000]));
+        while c.total_cycles() < t {
+            c.step();
+        }
+        assert_eq!(
+            c.total_cycles(),
+            t,
+            "NOP stepping should land exactly on {t}"
+        );
+        c.read_mem(0xFF04)
+    }
+
+    assert_eq!(div_after(0), 0xAB, "DIV at the 0x0100 hand-off");
+    // The seeded counter is 0xABCA, so the roll to 0xAC is 54 T-cycles away.
+    // Bracketing it pins the phase, not just the register's starting value.
+    assert_eq!(div_after(52), 0xAB, "not rolled over yet at 52 T-cycles");
+    assert_eq!(div_after(56), 0xAC, "rolled over by 56 T-cycles");
+}

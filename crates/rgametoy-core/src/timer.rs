@@ -41,6 +41,27 @@ impl Timer {
         }
     }
 
+    /// Seed the system counter with the value the DMG boot ROM leaves behind.
+    ///
+    /// The counter free-runs from the moment the console powers on, so by the
+    /// time the boot ROM hands control to the cartridge at 0x0100 it has been
+    /// counting for the boot ROM's whole execution — DIV reads 0xAB there, not
+    /// 0. We do not execute the boot ROM (see `Console::power_cycle`), so the
+    /// counter has to be placed by hand or every timer phase is wrong relative
+    /// to hardware: TIMA's increments land at the wrong absolute cycle, which
+    /// any test measuring elapsed time through TIMA can see.
+    ///
+    /// The exact low byte is pinned to `0xABC8..=0xABCB` by gbmicrotest
+    /// `poweron_div_000/004/005` (DIV must still read 0xAB 16 T-cycles in and
+    /// 0xAC by 20) and narrowed to `0xABC9..=0xABCB` by `halt_bug`, which sums
+    /// TIMA across four reads 12 T apart. Every value in that window also
+    /// passes mooneye `boot_div-dmgABCmgb`. The midpoint is taken so a future
+    /// off-by-one elsewhere does not silently fall out of the window.
+    pub(crate) fn seed_post_boot_div(&mut self) {
+        self.counter = 0xABCA;
+        self.prev_counter = self.counter.wrapping_sub(1);
+    }
+
     /// Advance the timer by `cycles` T-cycles. Returns `true` if TIMA overflowed
     /// and its interrupt should fire this step.
     pub fn tick(&mut self, cycles: u8) -> bool {

@@ -128,6 +128,13 @@ impl Console {
             bus.write_byte(addr, value);
         }
         bus.write_byte(0xFF0F, 0xE1);
+
+        // DIV is not in the table above: it cannot be written to a value (a
+        // store to 0xFF04 resets the counter), and it is not 0 here — the
+        // counter free-runs through the boot ROM, so the cartridge starts
+        // executing with DIV at 0xAB. Placing it sets the phase every later
+        // TIMA increment is measured against.
+        self.soc.seed_post_boot_div();
     }
 
     /// Run the machine until the CPU retires one instruction (or services an
