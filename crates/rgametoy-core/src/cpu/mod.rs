@@ -1,7 +1,6 @@
 use crate::bus::Bus;
 #[cfg(feature = "serialize")]
 use crate::state::{write_bool, write_u8, Reader, SaveStateError};
-use std::collections::VecDeque;
 
 pub mod registers;
 
@@ -17,14 +16,20 @@ pub use self::registers::Registers;
 /// expressed as a closure so the decode can stay a direct transcription of the
 /// opcode semantics. The CPU runs one micro-op per M-cycle: each closure either
 /// performs exactly one bus access / internal cycle (ticking the machine by 4
-/// T-cycles via the `read`/`write`/`tick` helpers) or — for single-cycle
-/// instructions — only updates registers in the fetch M-cycle it rides on.
+/// T-cycles via the `read`/`write`/`tick` helpers) or — riding one of those —
+/// only updates registers.
 ///
-/// The trailing `&mut VecDeque<MicroOp>` lets a micro-op enqueue the rest of a
-/// *run-time-decoded* sequence: the `0xCB` prefix only learns its real opcode
+/// An instruction whose *whole* body is register work occupies no cycle of its
+/// own and so builds no micro-op at all: `decode` runs it inline in the fetch
+/// M-cycle. Only zero-cycle work that has to *follow* a later M-cycle (the pair
+/// load ending `LD BC, nn`, say) becomes a [`MicroOp::zero`].
+///
+/// A micro-op is *popped* before it runs, so it owns itself and can reach the
+/// rest of the queue back through `cpu.ops` — which is how a *run-time-decoded*
+/// sequence enqueues its tail: the `0xCB` prefix only learns its real opcode
 /// when it fetches the second byte, so that micro-op appends the CB operation's
-/// own micro-ops. (A newtype rather than an alias, since the type is recursive.)
-type MicroFn = dyn FnOnce(&mut Cpu, &mut dyn Bus, &mut VecDeque<MicroOp>);
+/// own micro-ops from inside.
+type MicroFn = dyn FnOnce(&mut Cpu, &mut dyn Bus);
 
 pub(crate) struct MicroOp {
     /// Whether this micro-op occupies its own M-cycle. A *ticking* micro-op is
@@ -39,7 +44,7 @@ pub(crate) struct MicroOp {
 impl MicroOp {
     /// A micro-op that occupies its own M-cycle (a bus access or an internal
     /// delay): the clock advances once for it.
-    fn new(f: impl FnOnce(&mut Cpu, &mut dyn Bus, &mut VecDeque<MicroOp>) + 'static) -> MicroOp {
+    fn new(f: impl FnOnce(&mut Cpu, &mut dyn Bus) + 'static) -> MicroOp {
         MicroOp {
             ticking: true,
             f: Box::new(f),
@@ -48,7 +53,7 @@ impl MicroOp {
 
     /// A micro-op that does only register work, riding the preceding ticking
     /// micro-op's M-cycle (the clock does not advance for it).
-    fn zero(f: impl FnOnce(&mut Cpu, &mut dyn Bus, &mut VecDeque<MicroOp>) + 'static) -> MicroOp {
+    fn zero(f: impl FnOnce(&mut Cpu, &mut dyn Bus) + 'static) -> MicroOp {
         MicroOp {
             ticking: false,
             f: Box::new(f),
@@ -58,16 +63,76 @@ impl MicroOp {
     /// Execute this micro-op. It performs only its bus access / register work;
     /// advancing the clock (ticking the peripherals) is the *caller's* job,
     /// done once per ticking micro-op.
-    fn run(self, cpu: &mut Cpu, bus: &mut dyn Bus, ops: &mut VecDeque<MicroOp>) {
-        (self.f)(cpu, bus, ops)
+    fn run(self, cpu: &mut Cpu, bus: &mut dyn Bus) {
+        (self.f)(cpu, bus)
+    }
+}
+
+/// The longest micro-op program an instruction decodes into: `CALL nn` is two
+/// operand fetches, an internal cycle, two stack writes and the PC load; the
+/// interrupt dispatch is five. Eight leaves headroom and is asserted below.
+const OP_CAPACITY: usize = 8;
+
+/// The pending micro-ops of the instruction in flight — a fixed-capacity ring
+/// living inline in the [`Cpu`].
+///
+/// This is popped and re-checked on every M-cycle, which makes it the single
+/// hottest data structure in the emulator; a heap-backed `VecDeque` put a load
+/// of the buffer pointer and a capacity check on that path for a queue that
+/// never exceeds [`OP_CAPACITY`] entries.
+pub(crate) struct OpQueue {
+    slots: [Option<MicroOp>; OP_CAPACITY],
+    head: usize,
+    len: usize,
+}
+
+impl OpQueue {
+    fn new() -> OpQueue {
+        OpQueue {
+            slots: [const { None }; OP_CAPACITY],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    fn push_back(&mut self, op: MicroOp) {
+        debug_assert!(self.len < OP_CAPACITY, "micro-op queue overflow");
+        self.slots[(self.head + self.len) % OP_CAPACITY] = Some(op);
+        self.len += 1;
+    }
+
+    fn pop_front(&mut self) -> Option<MicroOp> {
+        if self.len == 0 {
+            return None;
+        }
+        let op = self.slots[self.head].take();
+        self.head = (self.head + 1) % OP_CAPACITY;
+        self.len -= 1;
+        op
+    }
+
+    /// Whether the next micro-op is a zero-cycle one (a rider on the M-cycle
+    /// just run). False when the queue is empty.
+    fn next_is_zero_cycle(&self) -> bool {
+        self.len != 0 && self.slots[self.head].as_ref().is_some_and(|op| !op.ticking)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Default for OpQueue {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 /// The Sharp SM83 (LR35902) CPU core.
 ///
 /// Execution is *micro-op based*: each opcode decodes into a queue of one
-/// M-cycle micro-ops (see [`MicroOp`]), and the CPU runs one micro-op per
-/// M-cycle. Every bus access and internal delay is its own micro-op, so
+/// M-cycle micro-ops (the crate-internal `MicroOp`), and the CPU runs one
+/// micro-op per M-cycle. Every bus access and internal delay is its own, so
 /// peripherals move within an instruction — not just between instructions —
 /// which is what makes read/write timing observable (Blargg `mem_timing`).
 /// This is also what lets the machine later be driven T-cycle by T-cycle from
@@ -100,10 +165,10 @@ pub struct Cpu {
     tmp8: u8,
     tmp16: u16,
     /// The current instruction's pending micro-ops (the fetch micro-op is
-    /// enqueued by `fill`; decode may append more, e.g. for `0xCB`). Empty at
-    /// every instruction boundary, which is the only time the CPU is cloned or
-    /// serialized — so the queue is never cloned or written to a save state.
-    ops: VecDeque<MicroOp>,
+    /// enqueued by `fill`; decode appends the rest). Empty at every instruction
+    /// boundary, which is the only time the CPU is cloned or serialized — so
+    /// the queue is never cloned or written to a save state.
+    ops: OpQueue,
     /// Whether an `EI` from the *previous* instruction is still waiting to take
     /// effect, captured at the start of the instruction now running. Together
     /// with `ime_pending` this is what makes `EI`'s promotion fire one
@@ -130,7 +195,7 @@ impl Clone for Cpu {
             cycles: self.cycles,
             tmp8: self.tmp8,
             tmp16: self.tmp16,
-            ops: VecDeque::new(),
+            ops: OpQueue::new(),
             ei_was_pending: self.ei_was_pending,
         }
     }
@@ -148,7 +213,7 @@ impl Cpu {
             cycles: 0,
             tmp8: 0,
             tmp16: 0,
-            ops: VecDeque::new(),
+            ops: OpQueue::new(),
             ei_was_pending: false,
         }
     }
@@ -215,22 +280,21 @@ impl Cpu {
     /// peripherals) is the *caller's* job, done once per `tick_m`, so a bus
     /// access lands at the end of its M-cycle exactly as before.
     ///
-    /// The queue is taken out of `self` so a micro-op can hold `&mut Cpu` and
-    /// `&mut ops` (to append, e.g. `0xCB`) without a double mutable borrow.
+    /// Popping a micro-op moves it out of the queue, so running it can hold
+    /// `&mut Cpu` — and reach `cpu.ops` to append (e.g. `0xCB`) — without a
+    /// double mutable borrow.
     pub fn tick_m(&mut self, bus: &mut dyn Bus) {
-        let mut ops = std::mem::take(&mut self.ops);
-        if let Some(op) = ops.pop_front() {
+        if let Some(op) = self.ops.pop_front() {
             debug_assert!(op.ticking, "tick_m: expected a ticking micro-op");
-            op.run(self, bus, &mut ops);
+            op.run(self, bus);
             self.cycles = self.cycles.wrapping_add(4);
         }
         // Run any zero-cycle micro-ops riding this M-cycle (register work that
         // the clock does not advance for).
-        while ops.front().is_some_and(|op| !op.ticking) {
-            let op = ops.pop_front().unwrap();
-            op.run(self, bus, &mut ops);
+        while self.ops.next_is_zero_cycle() {
+            let op = self.ops.pop_front().unwrap();
+            op.run(self, bus);
         }
-        self.ops = ops;
     }
 
     /// Whether the CPU is at an instruction boundary (no micro-ops pending).
@@ -300,14 +364,14 @@ impl Cpu {
         // A normal instruction: queue the fetch micro-op. It reads the opcode
         // (one M-cycle), then decodes — appending the remaining micro-ops (and,
         // for `0xCB`, a further run-time decode).
-        self.ops.push_back(MicroOp::new(|cpu, bus, ops| {
+        self.ops.push_back(MicroOp::new(|cpu, bus| {
             let opcode = cpu.fetch_byte(bus);
             if cpu.halt_bug {
                 // Undo the PC increment so the byte after HALT executes twice.
                 cpu.halt_bug = false;
                 cpu.registers.pc = cpu.registers.pc.wrapping_sub(1);
             }
-            cpu.decode(opcode, ops);
+            cpu.decode(opcode, bus);
         }));
     }
 
@@ -323,14 +387,14 @@ impl Cpu {
     fn enqueue_interrupt_service(&mut self) {
         // M1 (internal): clear IME so a second interrupt cannot nest. The clock
         // advances for this M-cycle; the micro-op does only the register work.
-        self.ops.push_back(MicroOp::new(|cpu, _, _| {
+        self.ops.push_back(MicroOp::new(|cpu, _| {
             cpu.ime = false;
         }));
         // M2 (internal).
         Self::emit_tick(&mut self.ops);
         // M3: push the high byte of the return address, then re-sample IE & IF
         // into `tmp8` (a non-ticking read on the tail of the write M-cycle).
-        self.ops.push_back(MicroOp::new(|cpu, bus, _| {
+        self.ops.push_back(MicroOp::new(|cpu, bus| {
             cpu.registers.sp = cpu.registers.sp.wrapping_sub(1);
             let sp = cpu.registers.sp;
             let pc_hi = (cpu.registers.pc >> 8) as u8;
@@ -339,7 +403,7 @@ impl Cpu {
         }));
         // M4: push the low byte, then choose the vector from the re-sampled
         // `tmp8` and load PC (all non-ticking, on the tail of the write).
-        self.ops.push_back(MicroOp::new(|cpu, bus, _| {
+        self.ops.push_back(MicroOp::new(|cpu, bus| {
             cpu.registers.sp = cpu.registers.sp.wrapping_sub(1);
             let sp = cpu.registers.sp;
             let pc_lo = cpu.registers.pc as u8;
@@ -389,17 +453,17 @@ impl Cpu {
     /// Push a micro-op that occupies one M-cycle purely as an internal delay
     /// (no bus access, no register work): the clock advances for it and nothing
     /// else happens.
-    fn emit_tick(ops: &mut VecDeque<MicroOp>) {
-        ops.push_back(MicroOp::new(|_, _, _| {}));
+    fn emit_tick(ops: &mut OpQueue) {
+        ops.push_back(MicroOp::new(|_, _| {}));
     }
 
     /// Push the two fetch micro-ops that read a 16-bit immediate little-endian
     /// into `tmp16` (low byte first).
-    fn emit_fetch_word(ops: &mut VecDeque<MicroOp>) {
-        ops.push_back(MicroOp::new(|cpu, bus, _| {
+    fn emit_fetch_word(ops: &mut OpQueue) {
+        ops.push_back(MicroOp::new(|cpu, bus| {
             cpu.tmp16 = (cpu.tmp16 & 0xFF00) | cpu.fetch_byte(bus) as u16;
         }));
-        ops.push_back(MicroOp::new(|cpu, bus, _| {
+        ops.push_back(MicroOp::new(|cpu, bus| {
             cpu.tmp16 = ((cpu.fetch_byte(bus) as u16) << 8) | (cpu.tmp16 & 0x00FF);
         }));
     }
@@ -408,13 +472,13 @@ impl Cpu {
     /// then the low byte to `SP-2` (SP ends decremented by 2). The value pushed
     /// is read from the CPU at run time by `value`, so a caller can push a
     /// register pair or the program counter (for CALL/RST).
-    fn emit_push(ops: &mut VecDeque<MicroOp>, value: fn(&Cpu) -> u16) {
-        ops.push_back(MicroOp::new(move |cpu, bus, _| {
+    fn emit_push(ops: &mut OpQueue, value: fn(&Cpu) -> u16) {
+        ops.push_back(MicroOp::new(move |cpu, bus| {
             cpu.registers.sp = cpu.registers.sp.wrapping_sub(1);
             let sp = cpu.registers.sp;
             cpu.write(bus, sp, (value(cpu) >> 8) as u8);
         }));
-        ops.push_back(MicroOp::new(move |cpu, bus, _| {
+        ops.push_back(MicroOp::new(move |cpu, bus| {
             cpu.registers.sp = cpu.registers.sp.wrapping_sub(1);
             let sp = cpu.registers.sp;
             cpu.write(bus, sp, value(cpu) as u8);
@@ -423,13 +487,13 @@ impl Cpu {
 
     /// Push the two read micro-ops of a stack pop into `tmp16` (low byte from
     /// `SP`, high byte from `SP+1`; SP ends incremented by 2).
-    fn emit_pop(ops: &mut VecDeque<MicroOp>) {
-        ops.push_back(MicroOp::new(|cpu, bus, _| {
+    fn emit_pop(ops: &mut OpQueue) {
+        ops.push_back(MicroOp::new(|cpu, bus| {
             let lo = cpu.read(bus, cpu.registers.sp) as u16;
             cpu.registers.sp = cpu.registers.sp.wrapping_add(1);
             cpu.tmp16 = (cpu.tmp16 & 0xFF00) | lo;
         }));
-        ops.push_back(MicroOp::new(|cpu, bus, _| {
+        ops.push_back(MicroOp::new(|cpu, bus| {
             let hi = cpu.read(bus, cpu.registers.sp) as u16;
             cpu.registers.sp = cpu.registers.sp.wrapping_add(1);
             cpu.tmp16 = (hi << 8) | (cpu.tmp16 & 0x00FF);

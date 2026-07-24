@@ -2,7 +2,6 @@
 //! into micro-ops, plus its bit-manipulation primitives.
 
 use super::{Cpu, MicroOp};
-use std::collections::VecDeque;
 
 impl Cpu {
     /// Decode a `0xCB`-prefixed opcode into micro-ops. The `0xCB` fetch and the
@@ -10,21 +9,22 @@ impl Cpu {
     /// operand needs. A register operand does all its work in the fetch M-cycle
     /// (a zero-cycle micro-op); a `(HL)` operand reads on the next M-cycle and,
     /// unless BIT, writes back on the one after.
-    pub(super) fn decode_cb(&self, cb: u8, ops: &mut VecDeque<MicroOp>) {
+    pub(super) fn decode_cb(&mut self, cb: u8) {
+        let ops = &mut self.ops;
         let index = cb & 0x07;
         if index == 6 {
             // (HL): read the operand on its own M-cycle.
-            ops.push_back(MicroOp::new(|cpu, bus, _| {
+            ops.push_back(MicroOp::new(|cpu, bus| {
                 cpu.tmp8 = cpu.read(bus, cpu.registers.get_hl());
             }));
             if (0x40..=0x7F).contains(&cb) {
                 // BIT sets flags only, no write-back (rides the read M-cycle's end).
-                ops.push_back(MicroOp::zero(move |cpu, _, _| {
+                ops.push_back(MicroOp::zero(move |cpu, _| {
                     cpu.cb_bit(cpu.tmp8, (cb >> 3) & 0x07);
                 }));
             } else {
                 // Rotate/shift/RES/SET: transform and write back on the next M-cycle.
-                ops.push_back(MicroOp::new(move |cpu, bus, _| {
+                ops.push_back(MicroOp::new(move |cpu, bus| {
                     let (result, _) = cpu.cb_alu(cb, cpu.tmp8);
                     let hl = cpu.registers.get_hl();
                     cpu.write(bus, hl, result);
@@ -34,7 +34,7 @@ impl Cpu {
             // Register operand: read / transform / write are all register-only
             // (read_reg/write_reg only tick for index 6), so they ride the
             // second-byte fetch M-cycle.
-            ops.push_back(MicroOp::zero(move |cpu, bus, _| {
+            ops.push_back(MicroOp::zero(move |cpu, bus| {
                 let value = cpu.read_reg(index, bus);
                 let (result, is_bit) = cpu.cb_alu(cb, value);
                 if !is_bit {
