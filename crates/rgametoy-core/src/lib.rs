@@ -125,13 +125,31 @@ impl Console {
         bus.write_byte(0xFF0F, 0xE1);
     }
 
-    /// Fetch/execute one instruction (or service an interrupt), then advance
-    /// the peripherals through the bus. Returns T-cycles consumed.
+    /// Run the machine until the CPU retires one instruction (or services an
+    /// interrupt), then return the T-cycles consumed.
+    ///
+    /// This is the crystal's view: the loop is the master clock, and each
+    /// M-cycle it advances the peripherals (`bus.tick`) *and* ticks the CPU one
+    /// micro-op — two peers on the same clock, not a CPU sampling a passive
+    /// system. The CPU's bus access lands at the end of its M-cycle (the
+    /// peripherals have already advanced), exactly as real hardware.
     pub fn step(&mut self) -> u8 {
-        // Assemble the transient bus (system + inserted cartridge) and let the
-        // CPU drive it; it ticks the peripherals itself, per M-cycle.
+        // Assemble the transient bus (system + inserted cartridge): the clock
+        // (`bus.tick`) and the CPU's accesses both flow through it.
         let mut bus = BusView::new(&mut self.soc, &mut self.cartridge);
-        let cycles = self.cpu.step(&mut bus);
+        loop {
+            // At an instruction boundary the CPU decides its next micro-op
+            // program (interrupt poll, halt, or fetch) before the clock ticks.
+            if self.cpu.at_boundary() {
+                self.cpu.fill(&mut bus);
+            }
+            bus.tick(4); // the clock: peripherals advance one M-cycle
+            self.cpu.tick_m(&mut bus); // the peer: one ticking micro-op + riders
+            if self.cpu.at_boundary() {
+                break;
+            }
+        }
+        let cycles = self.cpu.cycles();
         self.total_cycles += cycles as u64;
         cycles
     }

@@ -19,7 +19,7 @@ impl Cpu {
             }));
             if (0x40..=0x7F).contains(&cb) {
                 // BIT sets flags only, no write-back (rides the read M-cycle's end).
-                ops.push_back(MicroOp::new(move |cpu, _, _| {
+                ops.push_back(MicroOp::zero(move |cpu, _, _| {
                     cpu.cb_bit(cpu.tmp8, (cb >> 3) & 0x07);
                 }));
             } else {
@@ -34,7 +34,7 @@ impl Cpu {
             // Register operand: read / transform / write are all register-only
             // (read_reg/write_reg only tick for index 6), so they ride the
             // second-byte fetch M-cycle.
-            ops.push_back(MicroOp::new(move |cpu, bus, _| {
+            ops.push_back(MicroOp::zero(move |cpu, bus, _| {
                 let value = cpu.read_reg(index, bus);
                 let (result, is_bit) = cpu.cb_alu(cb, value);
                 if !is_bit {

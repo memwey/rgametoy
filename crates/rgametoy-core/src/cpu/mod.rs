@@ -26,17 +26,40 @@ pub use self::registers::Registers;
 /// own micro-ops. (A newtype rather than an alias, since the type is recursive.)
 type MicroFn = dyn FnOnce(&mut Cpu, &mut dyn Bus, &mut VecDeque<MicroOp>);
 
-pub(crate) struct MicroOp(Box<MicroFn>);
+pub(crate) struct MicroOp {
+    /// Whether this micro-op occupies its own M-cycle. A *ticking* micro-op is
+    /// one M-cycle: the machine's clock advances once for it (the caller ticks
+    /// the bus), and the micro-op performs that cycle's bus access / internal
+    /// work. A *zero-cycle* micro-op does only register work and rides the
+    /// preceding ticking micro-op's M-cycle — the clock does not advance for it.
+    ticking: bool,
+    f: Box<MicroFn>,
+}
 
 impl MicroOp {
+    /// A micro-op that occupies its own M-cycle (a bus access or an internal
+    /// delay): the clock advances once for it.
     fn new(f: impl FnOnce(&mut Cpu, &mut dyn Bus, &mut VecDeque<MicroOp>) + 'static) -> MicroOp {
-        MicroOp(Box::new(f))
+        MicroOp {
+            ticking: true,
+            f: Box::new(f),
+        }
     }
 
-    /// Execute this micro-op (one M-cycle of work, or a zero-cycle register
-    /// action riding the current M-cycle).
+    /// A micro-op that does only register work, riding the preceding ticking
+    /// micro-op's M-cycle (the clock does not advance for it).
+    fn zero(f: impl FnOnce(&mut Cpu, &mut dyn Bus, &mut VecDeque<MicroOp>) + 'static) -> MicroOp {
+        MicroOp {
+            ticking: false,
+            f: Box::new(f),
+        }
+    }
+
+    /// Execute this micro-op. It performs only its bus access / register work;
+    /// advancing the clock (ticking the peripherals) is the *caller's* job,
+    /// done once per ticking micro-op.
     fn run(self, cpu: &mut Cpu, bus: &mut dyn Bus, ops: &mut VecDeque<MicroOp>) {
-        (self.0)(cpu, bus, ops)
+        (self.f)(cpu, bus, ops)
     }
 }
 
@@ -183,26 +206,39 @@ impl Cpu {
         self.ime = false;
     }
 
-    /// Execute a single CPU step: service a pending interrupt if one is due,
-    /// otherwise fetch and execute one instruction. Returns the number of
-    /// T-cycles consumed.
+    /// Advance the CPU by one M-cycle: run the next *ticking* micro-op (this
+    /// M-cycle's bus access / internal work) plus any *zero-cycle* micro-ops
+    /// that ride it, then accrue 4 T-cycles. Advancing the clock (ticking the
+    /// peripherals) is the *caller's* job, done once per `tick_m`, so a bus
+    /// access lands at the end of its M-cycle exactly as before.
     ///
-    /// The step is `fill` (decide the next micro-op program and queue it) then
-    /// drain (run the queue to exhaustion). This keeps the whole-instruction
-    /// contract for `Console`, while the queue + `fill` are the resumable
-    /// structure the crystal-driven model ticks one M-cycle at a time.
-    pub fn step(&mut self, bus: &mut dyn Bus) -> u8 {
-        self.cycles = 0;
-        self.fill(bus);
-        // Run the queue to exhaustion. The queue is taken out of `self` so a
-        // micro-op can hold `&mut Cpu` and `&mut ops` (to append, e.g. `0xCB`)
-        // without a double mutable borrow of `self`; a full drain leaves it
-        // empty, so this is a no-op put-back at the instruction boundary.
+    /// The queue is taken out of `self` so a micro-op can hold `&mut Cpu` and
+    /// `&mut ops` (to append, e.g. `0xCB`) without a double mutable borrow.
+    pub fn tick_m(&mut self, bus: &mut dyn Bus) {
         let mut ops = std::mem::take(&mut self.ops);
-        while let Some(op) = ops.pop_front() {
+        if let Some(op) = ops.pop_front() {
+            debug_assert!(op.ticking, "tick_m: expected a ticking micro-op");
+            op.run(self, bus, &mut ops);
+            self.cycles = self.cycles.wrapping_add(4);
+        }
+        // Run any zero-cycle micro-ops riding this M-cycle (register work that
+        // the clock does not advance for).
+        while ops.front().is_some_and(|op| !op.ticking) {
+            let op = ops.pop_front().unwrap();
             op.run(self, bus, &mut ops);
         }
         self.ops = ops;
+    }
+
+    /// Whether the CPU is at an instruction boundary (no micro-ops pending).
+    /// This is when `fill` runs, when the machine may be cloned or serialized,
+    /// and when `Console` stops a whole-instruction step.
+    pub fn at_boundary(&self) -> bool {
+        self.ops.is_empty()
+    }
+
+    /// T-cycles consumed by the current instruction so far.
+    pub fn cycles(&self) -> u8 {
         self.cycles
     }
 
@@ -211,7 +247,8 @@ impl Cpu {
     /// applies the previous instruction's delayed `EI` promotion — this runs at
     /// the instruction boundary, which is exactly where the old end-of-step
     /// promotion landed.
-    fn fill(&mut self, bus: &mut dyn Bus) {
+    pub fn fill(&mut self, bus: &mut dyn Bus) {
+        self.cycles = 0;
         // The delayed `EI` from the previous instruction now takes effect —
         // unless a `DI` in that instruction cancelled it (clearing
         // `ime_pending`). This is the same boundary as the old end-of-step
@@ -235,7 +272,7 @@ impl Cpu {
         // rest of the machine — the PPU re-renders its frozen state and the
         // frame loop still advances (the game is simply stuck).
         if self.locked {
-            self.ops.push_back(MicroOp::new(|cpu, bus, _| cpu.tick(bus)));
+            Self::emit_tick(&mut self.ops);
             return;
         }
 
@@ -253,7 +290,7 @@ impl Cpu {
 
         if self.halted {
             // The CPU idles one machine cycle while halted.
-            self.ops.push_back(MicroOp::new(|cpu, bus, _| cpu.tick(bus)));
+            Self::emit_tick(&mut self.ops);
             return;
         }
 
@@ -281,13 +318,13 @@ impl Cpu {
     /// at `0xFFFF` the high-byte push overwrites `IE` and is re-sampled,
     /// retargeting or cancelling the dispatch (the `ie_push` quirk).
     fn enqueue_interrupt_service(&mut self) {
-        // M1 (internal): clear IME so a second interrupt cannot nest.
-        self.ops.push_back(MicroOp::new(|cpu, bus, _| {
+        // M1 (internal): clear IME so a second interrupt cannot nest. The clock
+        // advances for this M-cycle; the micro-op does only the register work.
+        self.ops.push_back(MicroOp::new(|cpu, _, _| {
             cpu.ime = false;
-            cpu.tick(bus);
         }));
         // M2 (internal).
-        self.ops.push_back(MicroOp::new(|cpu, bus, _| cpu.tick(bus)));
+        Self::emit_tick(&mut self.ops);
         // M3: push the high byte of the return address, then re-sample IE & IF
         // into `tmp8` (a non-ticking read on the tail of the write M-cycle).
         self.ops.push_back(MicroOp::new(|cpu, bus, _| {
@@ -317,32 +354,21 @@ impl Cpu {
             }
         }));
         // M5 (internal): the cycle that loads PC.
-        self.ops.push_back(MicroOp::new(|cpu, bus, _| cpu.tick(bus)));
+        Self::emit_tick(&mut self.ops);
     }
 
     // --- Timing primitives: every access / internal delay ticks the system ---
 
-    /// Advance the rest of the machine by `n` T-cycles. This is the single seam
-    /// through which the CPU (the bus master) drives time: all access and
-    /// internal-delay timing is expressed in T-cycles here, so peripherals can
-    /// later be observed at sub-M-cycle positions without touching the decode.
-    fn tick_t(&mut self, bus: &mut dyn Bus, n: u8) {
-        bus.tick(n);
-        self.cycles = self.cycles.wrapping_add(n);
-    }
-
-    /// Advance the rest of the machine by one M-cycle (4 T-cycles).
-    fn tick(&mut self, bus: &mut dyn Bus) {
-        self.tick_t(bus, 4);
-    }
-
+    /// Read a byte from the bus. This performs *only* the access — it does not
+    /// advance the clock. Advancing time (ticking the peripherals) is the
+    /// caller's job, done once per ticking micro-op, so a read lands at the end
+    /// of its M-cycle exactly as before.
     fn read(&mut self, bus: &mut dyn Bus, addr: u16) -> u8 {
-        self.tick(bus);
         bus.read_byte(addr)
     }
 
+    /// Write a byte to the bus (access only; see [`Self::read`]).
     fn write(&mut self, bus: &mut dyn Bus, addr: u16, value: u8) {
-        self.tick(bus);
         bus.write_byte(addr, value);
     }
 
@@ -357,10 +383,11 @@ impl Cpu {
     // These helpers push the shared multi-cycle patterns (word fetch, stack
     // push/pop) so the per-opcode decode stays a direct transcription.
 
-    /// Push a micro-op that does nothing but advance one M-cycle (an internal
-    /// cycle with no bus access).
+    /// Push a micro-op that occupies one M-cycle purely as an internal delay
+    /// (no bus access, no register work): the clock advances for it and nothing
+    /// else happens.
     fn emit_tick(ops: &mut VecDeque<MicroOp>) {
-        ops.push_back(MicroOp::new(|cpu, bus, _| cpu.tick(bus)));
+        ops.push_back(MicroOp::new(|_, _, _| {}));
     }
 
     /// Push the two fetch micro-ops that read a 16-bit immediate little-endian
