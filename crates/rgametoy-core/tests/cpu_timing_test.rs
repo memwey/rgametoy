@@ -84,8 +84,7 @@ fn base_opcode_cycle_counts_match_golden() {
     for op in 0..=255u8 {
         let got = cycles_base(op, 0x00);
         assert_eq!(
-            got,
-            BASE_CYCLES[op as usize],
+            got, BASE_CYCLES[op as usize],
             "base opcode {op:#04x}: expected {} T-cycles, got {got}",
             BASE_CYCLES[op as usize]
         );
@@ -97,8 +96,7 @@ fn cb_opcode_cycle_counts_match_golden() {
     for op in 0..=255u8 {
         let got = cycles_cb(op);
         assert_eq!(
-            got,
-            CB_CYCLES[op as usize],
+            got, CB_CYCLES[op as usize],
             "CB opcode {op:#04x}: expected {} T-cycles, got {got}",
             CB_CYCLES[op as usize]
         );
@@ -132,8 +130,8 @@ const CONDITIONALS: &[(u8, u8, u8)] = &[
 /// Canonical DMG taken / not-taken cycle counts per conditional group.
 fn conditional_cycles(op: u8) -> (u8, u8) {
     match op {
-        0x20 | 0x28 | 0x30 | 0x38 => (12, 8), // JR cc
-        0xC0 | 0xC8 | 0xD0 | 0xD8 => (20, 8), // RET cc
+        0x20 | 0x28 | 0x30 | 0x38 => (12, 8),  // JR cc
+        0xC0 | 0xC8 | 0xD0 | 0xD8 => (20, 8),  // RET cc
         0xC2 | 0xCA | 0xD2 | 0xDA => (16, 12), // JP cc
         0xC4 | 0xCC | 0xD4 | 0xDC => (24, 12), // CALL cc
         _ => unreachable!("not a conditional opcode: {op:#04x}"),

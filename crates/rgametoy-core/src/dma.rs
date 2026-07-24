@@ -2,7 +2,7 @@
 //! the PPU: writing $FF46 schedules a 160-byte copy from `source << 8` into OAM
 //! ($FE00-$FE9F). While the transfer runs the CPU can reach only HRAM (and, on
 //! the *other* bus, whichever the transfer is not driving) — see
-//! [`DmaController::conflicts`].
+//! `DmaController::conflicts`.
 //!
 //! This unit owns only the *timing*: the one-M-cycle startup delay, the 640-T
 //! busy window, and the source-page register. The copy itself is performed
@@ -69,7 +69,7 @@ impl DmaController {
             0xFE00..=0xFE9F => true,                         // OAM (destination)
             0x8000..=0x9FFF => video_dma,                    // VRAM (video bus)
             0x0000..=0x7FFF | 0xA000..=0xFDFF => !video_dma, // external bus
-            _ => false, // FEA0-FEFF, I/O, HRAM
+            _ => false,                                      // FEA0-FEFF, I/O, HRAM
         }
     }
 
@@ -167,10 +167,7 @@ mod tests {
         assert!(dma.conflicts(0xFE00), "OAM (destination)");
         assert!(dma.conflicts(0x9000), "VRAM (video bus)");
         assert!(!dma.conflicts(0x4000), "ROM readable (external bus)");
-        assert!(
-            !dma.conflicts(0xA000),
-            "cart RAM readable (external bus)"
-        );
+        assert!(!dma.conflicts(0xA000), "cart RAM readable (external bus)");
         assert!(!dma.conflicts(0xFF80), "HRAM always accessible");
     }
 }

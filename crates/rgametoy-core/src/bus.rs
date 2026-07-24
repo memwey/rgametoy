@@ -2,8 +2,8 @@ use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 use crate::dma::DmaController;
 use crate::hram::Hram;
-use crate::interrupts::InterruptType;
 use crate::intctrl::IntCtrl;
+use crate::interrupts::InterruptType;
 use crate::joypad::P1;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
@@ -179,9 +179,10 @@ impl<'a> BusView<'a> {
 
     /// Activate a pending OAM DMA once its startup delay elapses: copy 160 bytes
     /// from `source << 8` into OAM and open the 640-T-cycle busy window (during
-    /// which only HRAM is accessible). The copy is atomic here; since OAM is
-    /// blocked for the whole window the CPU cannot tell it from a byte-by-byte
-    /// transfer.
+    /// which the CPU keeps I/O, HRAM and whichever of the two buses the transfer
+    /// is *not* driving — see [`DmaController::conflicts`]). The copy is atomic
+    /// here; since OAM is blocked for the whole window the CPU cannot tell it
+    /// from a byte-by-byte transfer.
     fn start_oam_dma(&mut self) {
         // Source pages E0-FF read the WRAM echo (mirror C0-DF).
         let src = self.soc.dma.source();

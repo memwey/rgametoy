@@ -158,7 +158,11 @@ mod tests {
             remaining -= step as u16;
         }
         assert_eq!(s.output.len(), OUTPUT_CAP);
-        assert_eq!(*s.output.front().unwrap(), 1, "the oldest byte (0) was dropped");
+        assert_eq!(
+            *s.output.front().unwrap(),
+            1,
+            "the oldest byte (0) was dropped"
+        );
         assert_eq!(*s.output.back().unwrap(), 0x42);
     }
 }
