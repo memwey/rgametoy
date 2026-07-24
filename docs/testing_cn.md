@@ -196,6 +196,14 @@ cycle 级的波形读时序,是最硬的一簇,尚未攻坚。
 剩下 boot 类(不在范围)与 mealybug(mode-3 行内特效的**具体锁存 dot**,最严一档)。
 下面按子系统记录"怎么修的/学到什么",供后续 mealybug 攻坚复用方法。
 
+> **时钟模型(2026):整机已改为晶振驱动。** `Console::step` 是主时钟——每个 M-cycle
+> 它推进外设、并把 CPU 也 tick 一个微操作,CPU 与外设是同一时钟上的平级成员。CPU 已
+> 分解为逐 M-cycle 微操作(`cpu::MicroOp`,分 *ticking* / *zero-cycle*)。这是纯结构
+> 重构、**时序零变化**,由 golden 每指令周期表(`tests/cpu_timing_test.rs`)+ 完整 ROM
+> 套件双重验证。其中一个教训:golden 表只钉**时序**,所以 `cb_sra` 进位的一个转录错误
+> (应是 bit 0 而非 bit 7)穿过了它和 mooneye,最终是 Blargg `cpu_instrs` 09/11 抓到的——
+> **任何译码重写后都要跑 ROM 套件,不能只看灰盒单测。**
+
 ### 3.1 控制流读/写时序 + `ie_push`(总线/中断)
 mooneye 这些 timing 测试用 **OAM DMA 当示波器**:把栈指进 OAM、或让指令从 ROM 取指,
 再用 DMA 窗口卡边界。**写**方向修法:启动延迟 + 窗口内写丢弃。
@@ -207,8 +215,9 @@ CPU 仍可读**外部总线**(ROM)——RET 取指成功,只有 OAM 的 pop 被�
 阻塞(`dma_conflicts`,仅 OAM 恒锁)后,**整簇 9 个读时序全绿**,oam_dma 组不回归。
 
 `ie_push`:中断派发压返回地址高字节时,若 `SP=0` 则该字节落在 **IE(0xFFFF)**、改写使能位,
-向量按**压栈后**的 IE 重选——为 Timer 启动的派发会落到 VBlank 向量。已在 `service_interrupt`
-里"压高字节 → 重采样 IE&IF → 选向量"实现(单测 `test_ie_push_...`)。
+向量按**压栈后**的 IE 重选——为 Timer 启动的派发会落到 VBlank 向量。已在
+`enqueue_interrupt_service`(中断派发拆成五个微操作)实现:IE&IF 重采样骑在高字节写入上,
+选向量骑在低字节写入上(单测 `test_ie_push_...`)。
 
 ### 3.2 `rapid_toggle` —— 已修:TAC 写落 T3,在 timer 内部重放
 用 `inspect` 量化:真机 timer 中断在 **BC=FFD9** 服务,我们晚一圈(FFD8)。逐圈手推整个 ROM

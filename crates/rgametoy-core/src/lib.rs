@@ -1,6 +1,11 @@
 //! rgametoy-core — the emulated DMG Game Boy: CPU, PPU, APU, timer, cartridge,
 //! and the system bus that ties them together.
 //!
+//! The machine runs **crystal-driven**: [`Console::step`] is the master clock,
+//! advancing the peripherals and ticking the CPU one micro-op each M-cycle —
+//! CPU and peripherals are peers on one clock. The CPU is decomposed into
+//! per-M-cycle micro-ops (`cpu::MicroOp`).
+//!
 //! This crate is deterministic and free of host I/O — no window, audio device,
 //! filesystem, or wall-clock. It exposes [`Console`]: feed it a cartridge, call
 //! [`Console::run_frame`], read back the framebuffer / audio samples, and hand

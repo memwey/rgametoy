@@ -11,6 +11,12 @@ features; the emulated machine is a dependency-free library that also compiles t
   points (e.g. a TAC write, mid-mode-3 PPU register latches) are modelled
   **locally in the peripheral that needs them**, not by stepping the whole CPU
   T-by-T. See `docs/testing.md` §3.
+* The machine runs **crystal-driven**: `Console::step` is the master clock —
+  each M-cycle it advances the peripherals *and* ticks the CPU one micro-op,
+  so CPU, PPU, APU and timer are peers on one clock, not a CPU sampling a
+  passive system. The CPU is decomposed into per-M-cycle micro-ops
+  (`cpu::MicroOp`, tagged *ticking* / *zero-cycle*) so it can be ticked as a
+  peer; a bus access is access-only and lands at the end of its M-cycle.
 * **DMG model only** — no CGB / SGB / MGB behaviours.
 * **The core has no third-party dependencies** — implement the emulation itself.
   (Frontends *may* use crates: minifb, cpal, wasm-bindgen / web-sys.)

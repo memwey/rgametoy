@@ -12,12 +12,15 @@ use crate::state::{Reader, SaveStateError};
 use crate::timer::Timer;
 use crate::wram::Wram;
 
-/// Minimal interface the CPU (the bus master) uses to reach memory and to
-/// advance the rest of the machine one M-cycle at a time.
+/// Minimal memory/bus interface: address-decoded reads and writes, plus
+/// `tick` to advance the memory-mapped peripherals. The CPU uses it to reach
+/// memory; `Console::step` (the master clock) calls `tick` once per M-cycle to
+/// advance the peripherals — the CPU does *not* drive it.
 pub trait Bus {
     fn read_byte(&self, addr: u16) -> u8;
     fn write_byte(&mut self, addr: u16, value: u8);
-    /// Advance the memory-mapped peripherals by `cycles` T-cycles.
+    /// Advance the memory-mapped peripherals by `cycles` T-cycles. Called by
+    /// the clock driver (`Console::step`), not by the CPU.
     fn tick(&mut self, cycles: u8);
 }
 
@@ -28,9 +31,9 @@ pub trait Bus {
 /// that the SoC borrows per step — see [`BusView`]. This split mirrors the
 /// hardware: the handheld and the game pak are distinct.
 ///
-/// (Time is still *pushed* through [`Bus::tick`] for now — the CPU drives it as
-/// bus master. The crystal-driven `tick1` model, where this type owns the clock
-/// tree and the CPU is a ticked peer, lands in a later phase.)
+/// The clock tree is driven from above: `Console::step` ticks these peripherals
+/// once per M-cycle (via `Bus::tick`) and ticks the CPU's micro-op as a peer —
+/// the crystal-driven model where no single component is the master.
 #[derive(Clone)]
 pub struct Soc {
     wram: Wram,
@@ -162,8 +165,8 @@ pub(crate) fn bus_read(soc: &Soc, cart: &Cartridge, addr: u16) -> u8 {
 }
 
 /// A transient pairing of the console's [`Soc`] with the borrowed
-/// [`Cartridge`], assembled per step so the CPU can reach the whole memory map.
-/// This is the actual `Bus` the CPU drives; it owns neither side.
+/// [`Cartridge`], assembled per step so the clock driver and the CPU can both
+/// reach the whole memory map. It owns neither side.
 pub struct BusView<'a> {
     soc: &'a mut Soc,
     cart: &'a mut Cartridge,

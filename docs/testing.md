@@ -230,6 +230,17 @@ scope) and mealybug (the **exact latch dot** of mid-mode-3 effects, the strictes
 suite). Below, per subsystem: how it was fixed / what was learned, so the method
 can be reused for the mealybug push.
 
+> **Clock model (2026): the machine is now crystal-driven.** `Console::step` is the
+> master clock — each M-cycle it advances the peripherals *and* ticks the CPU one
+> micro-op, so CPU and peripherals are peers on one clock. The CPU is decomposed
+> into per-M-cycle micro-ops (`cpu::MicroOp`, *ticking* / *zero-cycle*). This was a
+> pure structural rework with **no timing change** — verified by the golden
+> per-opcode cycle table (`tests/cpu_timing_test.rs`) plus the full ROM suite. One
+> cautionary lesson from it: the golden table pins *timing* only, so a transcription
+> bug in `cb_sra`'s carry (bit 0, not bit 7) sailed through it *and* mooneye, and
+> was only caught by Blargg `cpu_instrs` 09/11 — **run the ROM suite after any
+> decode rewrite**, not just the gray-box tests.
+
 ### 3.1 Control-flow read/write timing + `ie_push` (bus/interrupts)
 These mooneye timing tests use **OAM DMA as an oscilloscope**: point the stack into
 OAM, or fetch instructions from ROM, then use the DMA window to straddle a boundary.
@@ -249,8 +260,9 @@ per-source bus blocking (`dma_conflicts`, only OAM always locked) turned the who
 `ie_push`: when the interrupt dispatch pushes the return address's high byte, if
 `SP=0` that byte lands on **IE (0xFFFF)** and rewrites the enable bits, so the vector
 is chosen from the IE value **after** the push — a dispatch begun for the Timer can
-land on the VBlank vector. Implemented in `service_interrupt` as "push high byte →
-re-sample IE&IF → pick the vector" (unit test `test_ie_push_...`).
+land on the VBlank vector. Implemented in `enqueue_interrupt_service` (the interrupt
+dispatch as five micro-ops): the IE&IF re-poll rides the high-byte push, the vector
+choice rides the low-byte push (unit test `test_ie_push_...`).
 
 ### 3.2 `rapid_toggle` — fixed: the TAC store lands on T3, replayed inside the timer
 Quantified with `inspect`: real hardware services the timer interrupt at **BC=FFD9**,
