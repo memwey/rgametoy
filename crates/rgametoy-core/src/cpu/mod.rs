@@ -52,7 +52,6 @@ impl MicroOp {
 ///
 /// The opcode decode lives in the sibling `execute` (base), `cb`
 /// (`0xCB`-prefixed) and `alu` submodules.
-#[derive(Clone)]
 pub struct Cpu {
     registers: Registers,
     /// Interrupt Master Enable.
@@ -77,6 +76,38 @@ pub struct Cpu {
     /// back). Transient within an instruction; never serialized.
     tmp8: u8,
     tmp16: u16,
+    /// The current instruction's pending micro-ops (the fetch micro-op is
+    /// enqueued by `fill`; decode may append more, e.g. for `0xCB`). Empty at
+    /// every instruction boundary, which is the only time the CPU is cloned or
+    /// serialized — so the queue is never cloned or written to a save state.
+    ops: VecDeque<MicroOp>,
+    /// Whether an `EI` from the *previous* instruction is still waiting to take
+    /// effect, captured at the start of the instruction now running. Transient;
+    /// re-derived from `ime_pending` at each instruction boundary, never
+    /// serialized.
+    ei_was_pending: bool,
+}
+
+impl Clone for Cpu {
+    fn clone(&self) -> Cpu {
+        debug_assert!(
+            self.ops.is_empty(),
+            "Cpu cloned mid-instruction (ops queue non-empty)"
+        );
+        Cpu {
+            registers: self.registers.clone(),
+            ime: self.ime,
+            ime_pending: self.ime_pending,
+            halted: self.halted,
+            halt_bug: self.halt_bug,
+            locked: self.locked,
+            cycles: self.cycles,
+            tmp8: self.tmp8,
+            tmp16: self.tmp16,
+            ops: VecDeque::new(),
+            ei_was_pending: false,
+        }
+    }
 }
 
 impl Cpu {
@@ -91,6 +122,8 @@ impl Cpu {
             cycles: 0,
             tmp8: 0,
             tmp16: 0,
+            ops: VecDeque::new(),
+            ei_was_pending: false,
         }
     }
 
@@ -153,17 +186,41 @@ impl Cpu {
     /// Execute a single CPU step: service a pending interrupt if one is due,
     /// otherwise fetch and execute one instruction. Returns the number of
     /// T-cycles consumed.
+    ///
+    /// The step is `fill` (decide the next micro-op program and queue it) then
+    /// drain (run the queue to exhaustion). This keeps the whole-instruction
+    /// contract for `Console`, while the queue + `fill` are the resumable
+    /// structure the crystal-driven model ticks one M-cycle at a time.
     pub fn step(&mut self, bus: &mut dyn Bus) -> u8 {
         self.cycles = 0;
-
-        // An illegal opcode has hung the CPU: it no longer fetches or responds
-        // to interrupts. The master clock keeps running, so keep ticking the
-        // rest of the machine — the PPU re-renders its frozen state and the
-        // frame loop still advances (the game is simply stuck).
-        if self.locked {
-            self.tick(bus);
-            return self.cycles;
+        self.fill(bus);
+        // Run the queue to exhaustion. The queue is taken out of `self` so a
+        // micro-op can hold `&mut Cpu` and `&mut ops` (to append, e.g. `0xCB`)
+        // without a double mutable borrow of `self`; a full drain leaves it
+        // empty, so this is a no-op put-back at the instruction boundary.
+        let mut ops = std::mem::take(&mut self.ops);
+        while let Some(op) = ops.pop_front() {
+            op.run(self, bus, &mut ops);
         }
+        self.ops = ops;
+        self.cycles
+    }
+
+    /// Decide and queue the next micro-op program: an idle cycle (locked or
+    /// halted), an interrupt dispatch, or a normal instruction fetch. Also
+    /// applies the previous instruction's delayed `EI` promotion — this runs at
+    /// the instruction boundary, which is exactly where the old end-of-step
+    /// promotion landed.
+    fn fill(&mut self, bus: &mut dyn Bus) {
+        // The delayed `EI` from the previous instruction now takes effect —
+        // unless a `DI` in that instruction cancelled it (clearing
+        // `ime_pending`). This is the same boundary as the old end-of-step
+        // promotion, so the one-instruction delay is preserved.
+        if self.ei_was_pending && self.ime_pending {
+            self.ime = true;
+            self.ime_pending = false;
+        }
+        self.ei_was_pending = self.ime_pending;
 
         // The two HALT outcomes are mutually exclusive: `halt()` sets exactly one
         // of them (halted, or the halt-bug), and each is cleared before the other
@@ -173,10 +230,14 @@ impl Cpu {
             "halted and halt_bug are exclusive"
         );
 
-        // Capture whether an `EI` from the *previous* instruction is waiting to
-        // take effect. Its `IME` promotion happens after this instruction runs,
-        // so a chain of `EI`s still enables interrupts after just one step.
-        let ei_was_pending = self.ime_pending;
+        // An illegal opcode has hung the CPU: it no longer fetches or responds
+        // to interrupts. The master clock keeps running, so keep ticking the
+        // rest of the machine — the PPU re-renders its frozen state and the
+        // frame loop still advances (the game is simply stuck).
+        if self.locked {
+            self.ops.push_back(MicroOp::new(|cpu, bus, _| cpu.tick(bus)));
+            return;
+        }
 
         // A pending interrupt wakes the CPU from HALT and, if IME is set, is
         // dispatched before the next instruction. Polling IF/IE does not
@@ -186,37 +247,28 @@ impl Cpu {
             self.halted = false;
             if self.ime {
                 self.service_interrupt(bus);
-                return self.cycles;
+                return;
             }
         }
 
         if self.halted {
             // The CPU idles one machine cycle while halted.
-            self.tick(bus);
-            return self.cycles;
+            self.ops.push_back(MicroOp::new(|cpu, bus, _| cpu.tick(bus)));
+            return;
         }
 
-        let opcode = self.fetch_byte(bus);
-        if self.halt_bug {
-            // Undo the PC increment so the byte after HALT executes twice.
-            self.halt_bug = false;
-            self.registers.pc = self.registers.pc.wrapping_sub(1);
-        }
-        // Run the instruction's micro-ops, one per M-cycle. The `0xCB` prefix
-        // appends its own sequence when it fetches the second byte.
-        let mut ops: VecDeque<MicroOp> = VecDeque::new();
-        self.decode(opcode, &mut ops);
-        while let Some(op) = ops.pop_front() {
-            op.run(self, bus, &mut ops);
-        }
-
-        // The delayed `EI` now takes effect — unless a `DI` in this very
-        // instruction cancelled it (which clears `ime_pending`).
-        if ei_was_pending && self.ime_pending {
-            self.ime = true;
-            self.ime_pending = false;
-        }
-        self.cycles
+        // A normal instruction: queue the fetch micro-op. It reads the opcode
+        // (one M-cycle), then decodes — appending the remaining micro-ops (and,
+        // for `0xCB`, a further run-time decode).
+        self.ops.push_back(MicroOp::new(|cpu, bus, ops| {
+            let opcode = cpu.fetch_byte(bus);
+            if cpu.halt_bug {
+                // Undo the PC increment so the byte after HALT executes twice.
+                cpu.halt_bug = false;
+                cpu.registers.pc = cpu.registers.pc.wrapping_sub(1);
+            }
+            cpu.decode(opcode, ops);
+        }));
     }
 
     /// Dispatch the highest-priority pending interrupt (5 M-cycles).
