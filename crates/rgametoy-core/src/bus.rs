@@ -1,12 +1,14 @@
 use crate::apu::Apu;
 use crate::cartridge::Cartridge;
+use crate::dma::DmaController;
 use crate::hram::Hram;
 use crate::interrupts::InterruptType;
+use crate::intctrl::IntCtrl;
 use crate::joypad::P1;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
 #[cfg(feature = "serialize")]
-use crate::state::{write_u16_le, write_u8, Reader, SaveStateError};
+use crate::state::{Reader, SaveStateError};
 use crate::timer::Timer;
 use crate::wram::Wram;
 
@@ -19,13 +21,18 @@ pub trait Bus {
     fn tick(&mut self, cycles: u8);
 }
 
-/// The console's memory-mapped system: every component the CPU can reach
-/// *except* the cartridge. The cartridge is a separate unit (inserted at
-/// power-on, owned by `Console`) that the bus borrows per step — see
-/// [`BusView`]. This split mirrors the hardware: the handheld and the game pak
-/// are distinct.
+/// The SoC (system-on-a-chip): every on-die component the CPU can reach
+/// *except* the cartridge. On a real DMG the CPU core, PPU, APU, timer, serial,
+/// joypad, interrupt controller, OAM-DMA unit, WRAM and HRAM are all one die;
+/// the cartridge is a separate unit (inserted at power-on, owned by `Console`)
+/// that the SoC borrows per step — see [`BusView`]. This split mirrors the
+/// hardware: the handheld and the game pak are distinct.
+///
+/// (Time is still *pushed* through [`Bus::tick`] for now — the CPU drives it as
+/// bus master. The crystal-driven `tick1` model, where this type owns the clock
+/// tree and the CPU is a ticked peer, lands in a later phase.)
 #[derive(Clone)]
-pub struct System {
+pub struct Soc {
     wram: Wram,
     hram: Hram,
     p1: P1,
@@ -33,25 +40,15 @@ pub struct System {
     timer: Timer,
     apu: Apu,
     serial: Serial,
-    /// T-cycles remaining in an active OAM DMA transfer (0 = idle). While it
-    /// runs the CPU can only reach HRAM.
-    dma_remaining: u16,
-    /// T-cycles until a just-requested OAM DMA actually starts. Writing FF46
-    /// does not begin the transfer immediately: there is a one-M-cycle idle gap
-    /// (OAM stays accessible) before the busy window opens.
-    dma_delay: u8,
-    /// High byte of the pending/active DMA source address — i.e. the 0xFF46
-    /// register itself, which the DMA unit owns (it is a bus master, not part
-    /// of the PPU, so the register lives here rather than in the PPU's
-    /// register file).
-    dma_source: u8,
-    if_register: u8, // Interrupt Flag register (0xFF0F)
-    ie_register: u8, // Interrupt Enable register (0xFFFF)
+    /// The OAM DMA controller — a bus master (the 0xFF46 unit), distinct from
+    /// the PPU.
+    dma: DmaController,
+    intctrl: IntCtrl,
 }
 
-impl System {
-    pub fn new() -> System {
-        System {
+impl Soc {
+    pub fn new() -> Soc {
+        Soc {
             wram: Wram::new(),
             hram: Hram::new(),
             p1: P1::new(),
@@ -59,11 +56,8 @@ impl System {
             timer: Timer::new(),
             apu: Apu::new(),
             serial: Serial::new(),
-            dma_remaining: 0,
-            dma_delay: 0,
-            dma_source: 0,
-            if_register: 0x00,
-            ie_register: 0x00,
+            dma: DmaController::new(),
+            intctrl: IntCtrl::new(),
         }
     }
 
@@ -93,18 +87,18 @@ impl System {
         // The joypad hardware raises the interrupt itself, gated by the P1
         // select lines — a press only interrupts if its group is selected.
         if self.p1.update_button_state(state) {
-            self.if_register |= InterruptType::Joypad.to_bit();
+            self.intctrl.request(InterruptType::Joypad);
         }
     }
 
     pub fn request_interrupt(&mut self, interrupt_type: InterruptType) {
-        self.if_register |= interrupt_type.to_bit();
+        self.intctrl.request(interrupt_type);
     }
 
     /// OAM DMA state `(active, source page)` for the `debug` inspector.
     #[cfg(feature = "debug")]
     pub fn debug_dma(&self) -> (bool, u8) {
-        (self.dma_remaining > 0, self.dma_source)
+        self.dma.debug_state()
     }
 
     /// Internal PPU state for the inspector (the system owns the PPU privately).
@@ -120,105 +114,82 @@ impl System {
     }
 }
 
-impl Default for System {
+impl Default for Soc {
     fn default() -> Self {
         Self::new()
     }
 }
 
 // -- Memory read path -------------------------------------------------------
-// Free functions (same module, so they can touch `System`'s private fields)
+// Free functions (same module, so they can touch `Soc`'s private fields)
 // shared by the mutable `BusView` and by read-only callers such as the `debug`
 // inspector, which need to read memory through a `&self` Console.
 
-/// Whether a CPU access to `addr` conflicts with an in-progress OAM DMA.
-///
-/// The transfer drives one of the two buses depending on its source: a VRAM
-/// source ($80-$9F) drives the *video* bus (VRAM + OAM), any other source drives
-/// the *external* bus (ROM / cart RAM / WRAM + echo). The CPU may freely use the
-/// other bus, plus I/O and HRAM; only OAM (the destination) is locked
-/// regardless.
-fn dma_conflicts(sys: &System, addr: u16) -> bool {
-    if sys.dma_remaining == 0 {
-        return false;
-    }
-    let video_dma = (0x80..=0x9F).contains(&sys.dma_source);
-    match addr {
-        0xFE00..=0xFE9F => true,                         // OAM (destination)
-        0x8000..=0x9FFF => video_dma,                    // VRAM (video bus)
-        0x0000..=0x7FFF | 0xA000..=0xFDFF => !video_dma, // external bus
-        _ => false,                                      // FEA0-FEFF, I/O, HRAM
-    }
-}
-
 /// Address-decoded read with no OAM-DMA blocking applied. [`bus_read`] layers the
 /// block on top; the DMA source copy uses this directly.
-fn read_raw(sys: &System, cart: &Cartridge, addr: u16) -> u8 {
+fn read_raw(soc: &Soc, cart: &Cartridge, addr: u16) -> u8 {
     match addr {
         0x0000..=0x7FFF => cart.read_rom(addr),
-        0x8000..=0x9FFF => sys.ppu.read_vram(addr),
+        0x8000..=0x9FFF => soc.ppu.read_vram(addr),
         0xA000..=0xBFFF => cart.read_ram(addr),
-        0xC000..=0xDFFF => sys.wram.read_byte(addr),
-        0xE000..=0xFDFF => sys.wram.read_byte(addr), // Echo RAM
-        0xFE00..=0xFE9F => sys.ppu.read_oam(addr),
+        0xC000..=0xDFFF => soc.wram.read_byte(addr),
+        0xE000..=0xFDFF => soc.wram.read_byte(addr), // Echo RAM
+        0xFE00..=0xFE9F => soc.ppu.read_oam(addr),
         0xFEA0..=0xFEFF => 0xFF, // Not usable
-        0xFF00 => sys.p1.read_register(),
-        0xFF01 | 0xFF02 => sys.serial.read_register(addr),
-        0xFF04..=0xFF07 => sys.timer.read_register(addr),
-        0xFF0F => sys.if_register | 0xE0, // top 3 bits read as 1
-        0xFF10..=0xFF3F => sys.apu.read_register(addr),
-        // 0xFF46 is the DMA unit's register, owned by the system (see the
-        // `dma_source` field) — it sits in the PPU's address range but is not
-        // a PPU register.
-        0xFF46 => sys.dma_source,
-        0xFF40..=0xFF4B => sys.ppu.read_register(addr),
+        0xFF00 => soc.p1.read_register(),
+        0xFF01 | 0xFF02 => soc.serial.read_register(addr),
+        0xFF04..=0xFF07 => soc.timer.read_register(addr),
+        0xFF0F => soc.intctrl.read(addr),
+        0xFF10..=0xFF3F => soc.apu.read_register(addr),
+        // 0xFF46 is the DMA unit's register, owned by the DMA controller (see
+        // `DmaController`) — it sits in the PPU's address range but is not a
+        // PPU register.
+        0xFF46 => soc.dma.source(),
+        0xFF40..=0xFF4B => soc.ppu.read_register(addr),
         0xFF03 | 0xFF08..=0xFF0E | 0xFF4C..=0xFF7F => 0xFF,
-        0xFF80..=0xFFFE => sys.hram.read_byte(addr),
-        0xFFFF => sys.ie_register,
+        0xFF80..=0xFFFE => soc.hram.read_byte(addr),
+        0xFFFF => soc.intctrl.read(addr),
     }
 }
 
 /// A CPU read: open bus (0xFF) if it conflicts with an active OAM DMA, else the
 /// address-decoded byte. Immutable, so the inspector can peek through `&self`.
-pub(crate) fn bus_read(sys: &System, cart: &Cartridge, addr: u16) -> u8 {
-    if dma_conflicts(sys, addr) {
+pub(crate) fn bus_read(soc: &Soc, cart: &Cartridge, addr: u16) -> u8 {
+    if soc.dma.conflicts(addr) {
         return 0xFF;
     }
-    read_raw(sys, cart, addr)
+    read_raw(soc, cart, addr)
 }
 
-/// A transient pairing of the console's [`System`] with the borrowed
+/// A transient pairing of the console's [`Soc`] with the borrowed
 /// [`Cartridge`], assembled per step so the CPU can reach the whole memory map.
 /// This is the actual `Bus` the CPU drives; it owns neither side.
 pub struct BusView<'a> {
-    sys: &'a mut System,
+    soc: &'a mut Soc,
     cart: &'a mut Cartridge,
 }
 
 impl<'a> BusView<'a> {
-    pub fn new(sys: &'a mut System, cart: &'a mut Cartridge) -> BusView<'a> {
-        BusView { sys, cart }
+    pub fn new(soc: &'a mut Soc, cart: &'a mut Cartridge) -> BusView<'a> {
+        BusView { soc, cart }
     }
 
     /// Activate a pending OAM DMA once its startup delay elapses: copy 160 bytes
-    /// from `dma_source << 8` into OAM and open the 640-T-cycle busy window
-    /// (during which only HRAM is accessible). The copy is atomic here; since
-    /// OAM is blocked for the whole window the CPU cannot tell it from a
-    /// byte-by-byte transfer.
+    /// from `source << 8` into OAM and open the 640-T-cycle busy window (during
+    /// which only HRAM is accessible). The copy is atomic here; since OAM is
+    /// blocked for the whole window the CPU cannot tell it from a byte-by-byte
+    /// transfer.
     fn start_oam_dma(&mut self) {
         // Source pages E0-FF read the WRAM echo (mirror C0-DF).
-        let page = if self.sys.dma_source >= 0xE0 {
-            self.sys.dma_source - 0x20
-        } else {
-            self.sys.dma_source
-        };
+        let src = self.soc.dma.source();
+        let page = if src >= 0xE0 { src - 0x20 } else { src };
         let source = (page as u16) << 8;
         for i in 0..0xA0u16 {
             // The DMA unit's own source fetches are never blocked.
-            let byte = read_raw(self.sys, self.cart, source + i);
-            self.sys.ppu.dma_write_oam(i as usize, byte);
+            let byte = read_raw(self.soc, self.cart, source + i);
+            self.soc.ppu.dma_write_oam(i as usize, byte);
         }
-        self.sys.dma_remaining = 160 * 4; // 160 M-cycles
+        self.soc.dma.begin(); // open the 640-T busy window
     }
 }
 
@@ -226,75 +197,69 @@ impl Bus for BusView<'_> {
     /// Advance the memory-mapped peripherals by `cycles` T-cycles, folding any
     /// interrupts they raise into the IF register.
     fn tick(&mut self, cycles: u8) {
-        if self.sys.timer.tick(cycles) {
-            self.sys.if_register |= InterruptType::Timer.to_bit();
+        if self.soc.timer.tick(cycles) {
+            self.soc.intctrl.request(InterruptType::Timer);
         }
-        if self.sys.serial.tick(cycles) {
-            self.sys.if_register |= InterruptType::Serial.to_bit();
+        if self.soc.serial.tick(cycles) {
+            self.soc.intctrl.request(InterruptType::Serial);
         }
-        self.sys.apu.tick(cycles);
-        let ppu_interrupts = self.sys.ppu.tick(cycles);
-        self.sys.if_register |= ppu_interrupts & 0x1F;
+        self.soc.apu.tick(cycles);
+        let ppu_interrupts = self.soc.ppu.tick(cycles);
+        self.soc.intctrl.request_mask(ppu_interrupts);
 
-        // Advance the OAM DMA: run down any active window, then the startup
-        // delay of a just-requested transfer (which may activate this cycle).
-        if self.sys.dma_remaining > 0 {
-            self.sys.dma_remaining = self.sys.dma_remaining.saturating_sub(cycles as u16);
-        }
-        if self.sys.dma_delay > 0 {
-            self.sys.dma_delay = self.sys.dma_delay.saturating_sub(cycles);
-            if self.sys.dma_delay == 0 {
-                self.start_oam_dma();
-            }
+        // Advance the OAM DMA: the controller runs down any active window and
+        // the startup delay of a just-requested transfer, signalling when the
+        // delay elapses so the copy can begin this cycle.
+        if self.soc.dma.tick(cycles) {
+            self.start_oam_dma();
         }
     }
 
     fn read_byte(&self, addr: u16) -> u8 {
-        bus_read(self.sys, self.cart, addr)
+        bus_read(self.soc, self.cart, addr)
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) {
         // A write conflicting with the transfer is dropped (the DMA owns that
         // bus) — e.g. a PUSH with the stack in OAM does not land mid-transfer.
-        if dma_conflicts(self.sys, addr) {
+        if self.soc.dma.conflicts(addr) {
             return;
         }
         match addr {
             0x0000..=0x7FFF => self.cart.write_rom(addr, value), // MBC control
-            0x8000..=0x9FFF => self.sys.ppu.write_vram(addr, value),
+            0x8000..=0x9FFF => self.soc.ppu.write_vram(addr, value),
             0xA000..=0xBFFF => self.cart.write_ram(addr, value),
-            0xC000..=0xDFFF => self.sys.wram.write_byte(addr, value),
-            0xE000..=0xFDFF => self.sys.wram.write_byte(addr, value), // Echo RAM
-            0xFE00..=0xFE9F => self.sys.ppu.write_oam(addr, value),
+            0xC000..=0xDFFF => self.soc.wram.write_byte(addr, value),
+            0xE000..=0xFDFF => self.soc.wram.write_byte(addr, value), // Echo RAM
+            0xFE00..=0xFE9F => self.soc.ppu.write_oam(addr, value),
             0xFEA0..=0xFEFF => {} // Not usable
             0xFF00 => {
                 // Re-selecting a group that holds a pressed button is a
                 // high→low edge on the input lines, so a write can interrupt.
-                if self.sys.p1.write_register(value) {
-                    self.sys.if_register |= InterruptType::Joypad.to_bit();
+                if self.soc.p1.write_register(value) {
+                    self.soc.intctrl.request(InterruptType::Joypad);
                 }
             }
-            0xFF01 | 0xFF02 => self.sys.serial.write_register(addr, value),
-            0xFF04..=0xFF07 => self.sys.timer.write_register(addr, value),
-            0xFF0F => self.sys.if_register = value & 0x1F,
-            0xFF10..=0xFF3F => self.sys.apu.write_register(addr, value),
+            0xFF01 | 0xFF02 => self.soc.serial.write_register(addr, value),
+            0xFF04..=0xFF07 => self.soc.timer.write_register(addr, value),
+            0xFF0F => self.soc.intctrl.write(addr, value),
+            0xFF10..=0xFF3F => self.soc.apu.write_register(addr, value),
             0xFF46 => {
                 // Request an OAM DMA. It does not start now: an idle M-cycle
                 // passes before the busy window opens. A request while a
                 // previous transfer runs lets that one keep blocking until the
                 // new one takes over.
-                self.sys.dma_source = value;
-                self.sys.dma_delay = 8;
+                self.soc.dma.request(value);
             }
             0xFF40..=0xFF4B => {
-                self.sys.ppu.write_register(addr, value);
-                if self.sys.ppu.take_stat_irq() {
-                    self.sys.if_register |= InterruptType::LCDStat.to_bit();
+                self.soc.ppu.write_register(addr, value);
+                if self.soc.ppu.take_stat_irq() {
+                    self.soc.intctrl.request(InterruptType::LCDStat);
                 }
             }
             0xFF03 | 0xFF08..=0xFF0E | 0xFF4C..=0xFF7F => {}
-            0xFF80..=0xFFFE => self.sys.hram.write_byte(addr, value),
-            0xFFFF => self.sys.ie_register = value,
+            0xFF80..=0xFFFE => self.soc.hram.write_byte(addr, value),
+            0xFFFF => self.soc.intctrl.write(addr, value),
         }
     }
 }
@@ -304,7 +269,7 @@ impl Bus for BusView<'_> {
 // `Console` (it is a distinct, externally-owned unit).
 
 #[cfg(feature = "serialize")]
-impl System {
+impl Soc {
     pub fn write_state(&self, out: &mut Vec<u8>) {
         self.wram.write_state(out);
         self.hram.write_state(out);
@@ -313,11 +278,8 @@ impl System {
         self.timer.write_state(out);
         self.apu.write_state(out);
         self.serial.write_state(out);
-        write_u16_le(out, self.dma_remaining);
-        write_u8(out, self.dma_delay);
-        write_u8(out, self.dma_source);
-        write_u8(out, self.if_register);
-        write_u8(out, self.ie_register);
+        self.dma.write_state(out);
+        self.intctrl.write_state(out);
     }
 
     pub fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SaveStateError> {
@@ -328,66 +290,8 @@ impl System {
         self.timer.read_state(r)?;
         self.apu.read_state(r)?;
         self.serial.read_state(r)?;
-        self.dma_remaining = r.read_u16_le()?;
-        self.dma_delay = r.read_u8()?;
-        self.dma_source = r.read_u8()?;
-        self.if_register = r.read_u8()?;
-        self.ie_register = r.read_u8()?;
-        if self.dma_remaining > 160 * 4
-            || self.dma_delay > 8
-            || self.if_register & !0x1F != 0
-            || self.ie_register & !0x1F != 0
-        {
-            return Err(SaveStateError::Corrupt);
-        }
+        self.dma.read_state(r)?;
+        self.intctrl.read_state(r)?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sys_with_dma(source: u8, remaining: u16) -> System {
-        let mut sys = System::new();
-        sys.dma_source = source;
-        sys.dma_remaining = remaining;
-        sys
-    }
-
-    /// Idle DMA conflicts with nothing.
-    #[test]
-    fn no_conflict_when_dma_is_idle() {
-        let sys = sys_with_dma(0xC0, 0);
-        for addr in [0x0000u16, 0x8000, 0xA000, 0xFE00, 0xFF80] {
-            assert!(!dma_conflicts(&sys, addr), "{addr:#06x}");
-        }
-    }
-
-    /// DMA from WRAM (0xC0) drives the *external* bus: OAM and the external bus
-    /// are blocked; VRAM (a different bus) and HRAM stay accessible.
-    #[test]
-    fn dma_from_external_bus_blocks_external_and_oam() {
-        let sys = sys_with_dma(0xC0, 100);
-        assert!(dma_conflicts(&sys, 0xFE00), "OAM (destination)");
-        assert!(dma_conflicts(&sys, 0x4000), "ROM (external bus)");
-        assert!(dma_conflicts(&sys, 0xA000), "cart RAM (external bus)");
-        assert!(!dma_conflicts(&sys, 0x8000), "VRAM readable (video bus)");
-        assert!(!dma_conflicts(&sys, 0xFF80), "HRAM always accessible");
-    }
-
-    /// DMA from VRAM (0x80) drives the *video* bus: OAM and VRAM are blocked;
-    /// the external bus and HRAM stay accessible.
-    #[test]
-    fn dma_from_video_bus_blocks_video_and_oam() {
-        let sys = sys_with_dma(0x80, 100);
-        assert!(dma_conflicts(&sys, 0xFE00), "OAM (destination)");
-        assert!(dma_conflicts(&sys, 0x9000), "VRAM (video bus)");
-        assert!(!dma_conflicts(&sys, 0x4000), "ROM readable (external bus)");
-        assert!(
-            !dma_conflicts(&sys, 0xA000),
-            "cart RAM readable (external bus)"
-        );
-        assert!(!dma_conflicts(&sys, 0xFF80), "HRAM always accessible");
     }
 }

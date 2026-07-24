@@ -14,8 +14,10 @@ pub mod cartridge;
 pub mod cpu;
 #[cfg(feature = "debug")]
 pub mod debug;
+pub mod dma;
 pub mod hram;
 pub mod interrupts;
+pub mod intctrl;
 pub mod joypad;
 pub mod ppu;
 pub mod serial;
@@ -28,7 +30,7 @@ pub mod state;
 pub mod timer;
 pub mod wram;
 
-use crate::bus::{bus_read, Bus, BusView, System};
+use crate::bus::{bus_read, Bus, BusView, Soc};
 use crate::cartridge::Cartridge;
 use crate::cpu::Cpu;
 #[cfg(feature = "serialize")]
@@ -40,7 +42,7 @@ use crate::state::{
 // 70224 T-cycles.
 const CYCLES_PER_FRAME: u64 = 70224;
 
-/// The emulated Game Boy handheld: the CPU, the memory-mapped [`System`], and
+/// The emulated Game Boy handheld: the CPU, the memory-mapped [`Soc`], and
 /// the inserted [`Cartridge`]. The cartridge is a distinct unit (a real game pak
 /// is separate hardware) — it is injected at [`power_on`](Console::power_on) and
 /// reachable via [`cartridge`](Console::cartridge); the bus borrows it per step
@@ -48,7 +50,7 @@ const CYCLES_PER_FRAME: u64 = 70224;
 #[derive(Clone)]
 pub struct Console {
     cpu: Cpu,
-    sys: System,
+    soc: Soc,
     cartridge: Cartridge,
     total_cycles: u64,
 }
@@ -57,7 +59,7 @@ impl Console {
     pub fn new() -> Console {
         Console {
             cpu: Cpu::new(),
-            sys: System::new(),
+            soc: Soc::new(),
             cartridge: Cartridge::new(),
             total_cycles: 0,
         }
@@ -86,7 +88,7 @@ impl Console {
     /// deterministic post-boot state that the DMG boot ROM would leave behind.
     pub fn power_cycle(&mut self) {
         self.cpu = Cpu::new();
-        self.sys = System::new();
+        self.soc = Soc::new();
         self.total_cycles = 0;
         self.cartridge.reset_controller();
         self.initialize_post_boot_state();
@@ -116,7 +118,7 @@ impl Console {
             (0xFF4A, 0x00), // WY
             (0xFF4B, 0x00), // WX
         ];
-        let mut bus = BusView::new(&mut self.sys, &mut self.cartridge);
+        let mut bus = BusView::new(&mut self.soc, &mut self.cartridge);
         for (addr, value) in io_defaults {
             bus.write_byte(addr, value);
         }
@@ -128,7 +130,7 @@ impl Console {
     pub fn step(&mut self) -> u8 {
         // Assemble the transient bus (system + inserted cartridge) and let the
         // CPU drive it; it ticks the peripherals itself, per M-cycle.
-        let mut bus = BusView::new(&mut self.sys, &mut self.cartridge);
+        let mut bus = BusView::new(&mut self.soc, &mut self.cartridge);
         let cycles = self.cpu.step(&mut bus);
         self.total_cycles += cycles as u64;
         cycles
@@ -140,7 +142,7 @@ impl Console {
         let mut cycles_this_frame = 0u64;
         while cycles_this_frame < CYCLES_PER_FRAME {
             cycles_this_frame += self.step() as u64;
-            if self.sys.take_frame_ready() {
+            if self.soc.take_frame_ready() {
                 break;
             }
         }
@@ -148,18 +150,18 @@ impl Console {
 
     /// The current frame as 160×144 shade values (0-3).
     pub fn framebuffer(&self) -> &[u8] {
-        self.sys.framebuffer()
+        self.soc.framebuffer()
     }
 
     /// Drain the APU's buffered stereo samples (at [`audio_output_rate`]).
     ///
     /// [`audio_output_rate`]: Console::audio_output_rate
     pub fn take_audio_samples(&mut self) -> Vec<f32> {
-        self.sys.take_audio_samples()
+        self.soc.take_audio_samples()
     }
 
     pub fn audio_output_rate(&self) -> u32 {
-        self.sys.audio_output_rate()
+        self.soc.audio_output_rate()
     }
 
     /// Total T-cycles executed since power-on. Divided by the 70224 cycles in a
@@ -184,19 +186,19 @@ impl Console {
     /// Read a byte through the memory map (no side effects). For tests and the
     /// `debug` inspector.
     pub fn read_mem(&self, addr: u16) -> u8 {
-        bus_read(&self.sys, &self.cartridge, addr)
+        bus_read(&self.soc, &self.cartridge, addr)
     }
 
     /// Write a byte through the memory map (routes to the cartridge/MBC, VRAM,
     /// I/O, …). For tests that set up memory state.
     pub fn write_mem(&mut self, addr: u16, value: u8) {
-        let mut bus = BusView::new(&mut self.sys, &mut self.cartridge);
+        let mut bus = BusView::new(&mut self.soc, &mut self.cartridge);
         bus.write_byte(addr, value);
     }
 
     /// Bytes the program has printed over the serial port (test-ROM output).
     pub fn take_serial_output(&mut self) -> Vec<u8> {
-        self.sys.take_serial_output()
+        self.soc.take_serial_output()
     }
 
     /// Serialize the entire machine — including the inserted cartridge's state —
@@ -216,7 +218,7 @@ impl Console {
         write_u64_le(&mut out, self.total_cycles);
         self.cpu.write_state(&mut out);
         self.cartridge.write_state(&mut out);
-        self.sys.write_state(&mut out);
+        self.soc.write_state(&mut out);
 
         let crc = crc32(&out[body_start..]);
         out[crc_pos..crc_pos + 4].copy_from_slice(&crc.to_le_bytes());
@@ -254,7 +256,7 @@ impl Console {
         next.total_cycles = r.read_u64_le()?;
         next.cpu.read_state(&mut r)?;
         next.cartridge.read_state(&mut r)?;
-        next.sys.read_state(&mut r)?;
+        next.soc.read_state(&mut r)?;
         if r.remaining() != 0 {
             return Err(SaveStateError::Corrupt);
         }
@@ -266,7 +268,7 @@ impl Console {
     /// its interrupt itself, gated by the P1 select lines (a press only
     /// interrupts if its group is currently selected).
     pub fn set_buttons(&mut self, state: u8) {
-        self.sys.set_buttons(state);
+        self.soc.set_buttons(state);
     }
 
     pub fn cpu(&self) -> &Cpu {

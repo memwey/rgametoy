@@ -1,16 +1,16 @@
 extern crate rgametoy_core;
 
-use rgametoy_core::bus::{Bus, BusView, System};
+use rgametoy_core::bus::{Bus, BusView, Soc};
 use rgametoy_core::cartridge::Cartridge;
 
-/// Run `f` against a fresh bus — the console's [`System`] paired with an empty
+/// Run `f` against a fresh bus — the console's [`Soc`] paired with an empty
 /// cartridge, borrowed for the closure's lifetime. This is the console-less way
 /// to unit-test the bus and OAM-DMA behaviour (which needs `tick(n)` control the
 /// public `Console` API deliberately doesn't expose).
 fn with_bus(f: impl FnOnce(&mut BusView)) {
-    let mut sys = System::new();
+    let mut soc = Soc::new();
     let mut cart = Cartridge::new();
-    let mut bus = BusView::new(&mut sys, &mut cart);
+    let mut bus = BusView::new(&mut soc, &mut cart);
     f(&mut bus);
 }
 

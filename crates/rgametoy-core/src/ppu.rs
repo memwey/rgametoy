@@ -158,7 +158,7 @@ pub struct Ppu {
     scx: u8,  // 0xFF43
     lyc: u8,  // 0xFF45
     // 0xFF46 (OAM DMA) is not a PPU register: the DMA unit is a bus master
-    // owned by `System`, which also holds the register's read-back value.
+    // owned by `Soc`, which also holds the register's read-back value.
     bgp: u8,  // 0xFF47
     obp0: u8, // 0xFF48
     obp1: u8, // 0xFF49
@@ -728,6 +728,16 @@ impl Ppu {
     //   - writes are gated by the visible mode alone, so they still land
     //     during the first 4 dots of a line and of internal mode 3 (the
     //     mode-2→3 handoff write window), and stay blocked to the visible end.
+    //
+    // This is one of two layers that gate the video/OAM bus. The *other* is the
+    // OAM-DMA controller driving the bus lines (`DmaController::conflicts`):
+    // a video-source transfer owns VRAM, and any transfer owns OAM (its
+    // destination). At the bus layer the two compose as a simple OR — a DMA
+    // conflict returns 0xFF before this method is reached, otherwise the PPU's
+    // own fetch ownership (these `can_*` gates) decides. Faithfully unifying
+    // them into a first-class video/OAM bus (where the PPU fetcher and the DMA
+    // are co-equal masters of one arbitrated bus) belongs to the crystal-driven
+    // bus-matrix work: there it falls out structurally instead of as this OR.
 
     fn can_read_vram(&self) -> bool {
         !self.lcd_enabled()
@@ -791,7 +801,7 @@ impl Ppu {
     }
 
     /// Read a PPU register (0xFF40-0xFF4B, except 0xFF46 which belongs to the
-    /// `System`-owned DMA unit). The STAT (0xFF41) mode bits deliberately
+    /// `Soc`-owned DMA unit). The STAT (0xFF41) mode bits deliberately
     /// report the *visible* mode, which lags the internal one by a few dots.
     pub fn read_register(&self, addr: u16) -> u8 {
         match addr {
@@ -815,7 +825,7 @@ impl Ppu {
     }
 
     /// Write a PPU register (0xFF40-0xFF4B, except 0xFF46 — the bus routes DMA
-    /// writes to `System`). Toggling LCDC bit 7 turns the LCD on/off (resetting
+    /// writes to `Soc`). Toggling LCDC bit 7 turns the LCD on/off (resetting
     /// or freezing the timing); STAT/LYC writes can raise a STAT interrupt.
     pub fn write_register(&mut self, addr: u16, value: u8) {
         match addr {

@@ -92,9 +92,9 @@ impl Console {
     /// Capture the full observable state right now.
     pub fn snapshot(&self) -> Snapshot {
         let r = self.cpu.get_registers();
-        let (ppu_mode, dots, lyc_match, stat_line) = self.sys.debug_ppu();
-        let (div, tima, tma, tac) = self.sys.debug_timer();
-        let (dma_active, dma_src) = self.sys.debug_dma();
+        let (ppu_mode, dots, lyc_match, stat_line) = self.soc.debug_ppu();
+        let (div, tima, tma, tac) = self.soc.debug_timer();
+        let (dma_active, dma_src) = self.soc.debug_dma();
         Snapshot {
             cycle: self.total_cycles,
             pc: r.get_pc(),
