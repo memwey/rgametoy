@@ -105,7 +105,7 @@ impl Cpu {
     }
 
     fn cb_sra(&mut self, v: u8) -> u8 {
-        let carry = (v >> 7) & 1;
+        let carry = v & 1;
         let r = (v >> 1) | (v & 0x80); // preserve sign bit (arithmetic shift)
         self.set_flags(r == 0, false, false, carry == 1);
         r
