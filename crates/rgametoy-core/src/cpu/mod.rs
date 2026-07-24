@@ -246,7 +246,7 @@ impl Cpu {
         if pending != 0 {
             self.halted = false;
             if self.ime {
-                self.service_interrupt(bus);
+                self.enqueue_interrupt_service();
                 return;
             }
         }
@@ -271,37 +271,53 @@ impl Cpu {
         }));
     }
 
-    /// Dispatch the highest-priority pending interrupt (5 M-cycles).
+    /// Queue the five M-cycle micro-ops of an interrupt dispatch.
     ///
-    /// The interrupt vector is only decided *after* the high byte of the return
-    /// address has been pushed: if `SP` points at `0xFFFF`, that push overwrites
-    /// `IE`, which can retarget the vector or — if it clears every enabled bit —
-    /// cancel the dispatch entirely and jump to `0x0000` (the `ie_push` quirk).
-    fn service_interrupt(&mut self, bus: &mut dyn Bus) {
-        self.ime = false;
-        self.tick(bus); // internal
-        self.tick(bus); // internal
-
-        // Push the high byte, then re-sample IE & IF to choose the vector.
-        self.registers.sp = self.registers.sp.wrapping_sub(1);
-        self.write(bus, self.registers.sp, (self.registers.pc >> 8) as u8);
-        let pending = bus.read_byte(0xFFFF) & bus.read_byte(0xFF0F) & 0x1F;
-
-        // Push the low byte.
-        self.registers.sp = self.registers.sp.wrapping_sub(1);
-        self.write(bus, self.registers.sp, self.registers.pc as u8);
-
-        if pending == 0 {
-            // Every enabled interrupt was cancelled mid-dispatch: vector to 0.
-            self.registers.pc = 0x0000;
-        } else {
-            // The lowest set bit has the highest priority (VBlank first).
-            let bit = pending.trailing_zeros() as u8;
-            let if_reg = bus.read_byte(0xFF0F);
-            bus.write_byte(0xFF0F, if_reg & !(1 << bit));
-            self.registers.pc = 0x0040 + (bit as u16) * 8;
-        }
-        self.tick(bus); // set PC
+    /// The dispatch is two internal cycles, push the return address high then
+    /// low, and a final internal cycle. The interrupt vector is decided only
+    /// *after* the high byte has been pushed: the IF/IE re-poll rides the
+    /// high-byte write (M3), and the vector decision (read IF, clear the
+    /// serviced bit, load PC) rides the low-byte write (M4) — so if `SP` points
+    /// at `0xFFFF` the high-byte push overwrites `IE` and is re-sampled,
+    /// retargeting or cancelling the dispatch (the `ie_push` quirk).
+    fn enqueue_interrupt_service(&mut self) {
+        // M1 (internal): clear IME so a second interrupt cannot nest.
+        self.ops.push_back(MicroOp::new(|cpu, bus, _| {
+            cpu.ime = false;
+            cpu.tick(bus);
+        }));
+        // M2 (internal).
+        self.ops.push_back(MicroOp::new(|cpu, bus, _| cpu.tick(bus)));
+        // M3: push the high byte of the return address, then re-sample IE & IF
+        // into `tmp8` (a non-ticking read on the tail of the write M-cycle).
+        self.ops.push_back(MicroOp::new(|cpu, bus, _| {
+            cpu.registers.sp = cpu.registers.sp.wrapping_sub(1);
+            let sp = cpu.registers.sp;
+            let pc_hi = (cpu.registers.pc >> 8) as u8;
+            cpu.write(bus, sp, pc_hi);
+            cpu.tmp8 = bus.read_byte(0xFFFF) & bus.read_byte(0xFF0F) & 0x1F;
+        }));
+        // M4: push the low byte, then choose the vector from the re-sampled
+        // `tmp8` and load PC (all non-ticking, on the tail of the write).
+        self.ops.push_back(MicroOp::new(|cpu, bus, _| {
+            cpu.registers.sp = cpu.registers.sp.wrapping_sub(1);
+            let sp = cpu.registers.sp;
+            let pc_lo = cpu.registers.pc as u8;
+            cpu.write(bus, sp, pc_lo);
+            let pending = cpu.tmp8;
+            if pending == 0 {
+                // Every enabled interrupt was cancelled mid-dispatch: vector to 0.
+                cpu.registers.pc = 0x0000;
+            } else {
+                // The lowest set bit has the highest priority (VBlank first).
+                let bit = pending.trailing_zeros() as u8;
+                let if_reg = bus.read_byte(0xFF0F);
+                bus.write_byte(0xFF0F, if_reg & !(1 << bit));
+                cpu.registers.pc = 0x0040 + (bit as u16) * 8;
+            }
+        }));
+        // M5 (internal): the cycle that loads PC.
+        self.ops.push_back(MicroOp::new(|cpu, bus, _| cpu.tick(bus)));
     }
 
     // --- Timing primitives: every access / internal delay ticks the system ---
