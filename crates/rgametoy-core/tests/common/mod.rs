@@ -139,3 +139,22 @@ pub fn find_roms(dir: &std::path::Path) -> Vec<PathBuf> {
     out.sort();
     out
 }
+
+/// Run a GBMicrotest ROM and report whether it passed.
+///
+/// These use a memory protocol rather than serial: the result lands in
+/// `0xFF80-0xFF82`, and only `0xFF82` is meaningful (`0x01` pass, `0xFF` fail)
+/// — `0xFF80`/`0xFF81` hold actual/expected but are not always written
+/// consistently, including on failure. The upstream how-to says two frames is
+/// enough for all but one test; we give eight for margin, and treat "never
+/// wrote a verdict" as not-passing rather than as a failure.
+pub fn gbmicrotest_passes(rom: &[u8]) -> bool {
+    let mut c = boot(rom);
+    for _ in 0..8 {
+        c.run_frame();
+        if c.read_mem(0xFF82) == 0x01 {
+            return true;
+        }
+    }
+    false
+}
