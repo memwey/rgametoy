@@ -37,6 +37,7 @@
 | `tests/ppu_test.rs` `#[cfg(feature = "debug")] mod debug_timing` | mode-3 内部长度 / SCX / 精灵惩罚聚合(经调试工具 `get_mode`,`--features debug` 才跑) |
 | `tests/cpu_instructions_test.rs` / `registers_test.rs` | 指令语义、标志位、寄存器 |
 | `tests/cpu_integration_test.rs` | 整程序跑通、`ADD HL` 进位、`ie_push` 向量重算、非法码锁死 |
+| `tests/cpu_timing_test.rs` | golden 每指令 T 周期数(全部 512 个 opcode)+ 每个条件指令的双路径 —— 未设 `GB_TEST_ROMS` 时替代 Blargg `mem_timing` 的本地安全网 |
 | `tests/timer_test.rs` | 16 位计数器、四频率、下降沿毛刺(TAC/DIV)、重载延迟三态 |
 | `tests/dma_test.rs` | OAM DMA 启动延迟、源总线阻塞(VRAM/外部)、echo 源、I/O 可读 |
 | `tests/joypad_test.rs` | P1 选择线映射、中断按选择线门控、松开/切组暴露已按键的边沿 |

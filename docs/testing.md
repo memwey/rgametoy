@@ -47,6 +47,7 @@ These files live under `crates/rgametoy-core/tests/` (paths below are shortened)
 | `tests/ppu_test.rs` `#[cfg(feature = "debug")] mod debug_timing` | mode-3 internal length / SCX / stacked-sprite-penalty aggregation (via the debug tool `get_mode`, `--features debug` only) |
 | `tests/cpu_instructions_test.rs` / `registers_test.rs` | instruction semantics, flags, registers |
 | `tests/cpu_integration_test.rs` | whole programs, `ADD HL` carries, `ie_push` vector re-evaluation, illegal-opcode lock-up |
+| `tests/cpu_timing_test.rs` | golden per-opcode T-cycle counts (all 512 opcodes) + both paths of every conditional — the local stand-in for Blargg `mem_timing` when `GB_TEST_ROMS` is unset |
 | `tests/timer_test.rs` | 16-bit counter, four frequencies, falling-edge glitches (TAC/DIV), the three-state reload delay |
 | `tests/dma_test.rs` | OAM DMA start delay, source-bus blocking (VRAM/external), echo source, I/O readable |
 | `tests/joypad_test.rs` | P1 select mapping, interrupt gated by select, release/select-exposes-held-button edges |
